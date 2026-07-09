@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:ui' as ui;
@@ -21,10 +22,17 @@ class EcoMapView extends StatefulWidget {
 
 class _EcoMapViewState extends State<EcoMapView> {
   final MapController _mapController = MapController();
+  final ScrollController _alertsScrollController = ScrollController();
   String? _lastSelectedAlertId;
   bool _isDarkMap = false; // MODO CLARO por defecto según pedido del usuario
   bool _isListExpanded = true;
   bool _showWasteLayer = false;
+
+  @override
+  void dispose() {
+    _alertsScrollController.dispose();
+    super.dispose();
+  }
 
   // Datos simulados de Contenedores y Botaderos en Cerro de Pasco
   final List<WastePoint> _wastePoints = [
@@ -1327,11 +1335,25 @@ class _EcoMapViewState extends State<EcoMapView> {
                           ),
                         ),
                       )
-                    : ListView.builder(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.only(left: 16.0, right: 16.0, bottom: 16.0),
-                        itemCount: alerts.length,
-                        itemBuilder: (context, index) {
+                    : Listener(
+                        onPointerSignal: (pointerSignal) {
+                          if (pointerSignal is PointerScrollEvent) {
+                            final newOffset = _alertsScrollController.offset +
+                                pointerSignal.scrollDelta.dy;
+                            _alertsScrollController.jumpTo(
+                              newOffset.clamp(
+                                0.0,
+                                _alertsScrollController.position.maxScrollExtent,
+                              ),
+                            );
+                          }
+                        },
+                        child: ListView.builder(
+                          controller: _alertsScrollController,
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.only(left: 16.0, right: 16.0, bottom: 16.0),
+                          itemCount: alerts.length,
+                          itemBuilder: (context, index) {
                           final alert = alerts[index];
                           
                           // Severidad Styling
@@ -1477,6 +1499,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                           );
                         },
                       ),
+                    ),
               ),
             ],
             ],
