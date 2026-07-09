@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: ecoalerta_db
+    environment:
+      POSTGRES_DB: ecoalerta
+      POSTGRES_USER: ecoalerta_user
+      POSTGRES_PASSWORD: ecoalerta_secure_pwd
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: always
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ecoalerta_backend
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=django-insecure-development-secret-key-12345
+      - DB_HOST=db
+      - DB_NAME=ecoalerta
+      - DB_USER=ecoalerta_user
+      - DB_PASSWORD=ecoalerta_secure_pwd
+      - DB_PORT=5432
+    depends_on:
+      - db
+    restart: always
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - BACKEND_URL=http://localhost:8000
+    container_name: ecoalerta_frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: always
+
+volumes:
+  pgdata:
