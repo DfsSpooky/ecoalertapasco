@@ -15,5 +15,4 @@ backend/
 supabase/
 node_modules/
 *.log
-*.lock
 *.iml
