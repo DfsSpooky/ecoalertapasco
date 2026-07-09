@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/eco_alert.dart';
 import '../state/app_state.dart';
 import 'package:file_picker/file_picker.dart';
+import 'eco_notification.dart';
 
 class AlertFormDialog extends StatefulWidget {
   const AlertFormDialog({super.key});
@@ -66,11 +67,11 @@ class _AlertFormDialogState extends State<AlertFormDialog> {
         } else {
           _mockImageName = null;
           _selectedFileBytes = null;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error al subir la foto al servidor.', style: GoogleFonts.outfit()),
-              backgroundColor: const Color(0xFFEF4444),
-            ),
+          EcoNotification.show(
+            context,
+            title: 'Error de Imagen',
+            message: 'Error al subir la foto al servidor.',
+            type: EcoNotificationType.error,
           );
         }
       });
@@ -199,26 +200,20 @@ class _AlertFormDialogState extends State<AlertFormDialog> {
                                 });
                                 
                                 if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      backgroundColor: const Color(0xFF10B981),
-                                      content: Text(
-                                        'Ubicación GPS fijada correctamente.',
-                                        style: GoogleFonts.outfit(color: Colors.white),
-                                      ),
-                                    ),
+                                  EcoNotification.show(
+                                    context,
+                                    title: 'Ubicación GPS',
+                                    message: 'Ubicación GPS fijada correctamente.',
+                                    type: EcoNotificationType.success,
                                   );
                                 }
                               } else {
                                 if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      backgroundColor: Colors.amber.shade800,
-                                      content: Text(
-                                        'No se pudo obtener la ubicación GPS. Verifique permisos.',
-                                        style: GoogleFonts.outfit(color: Colors.white),
-                                      ),
-                                    ),
+                                  EcoNotification.show(
+                                    context,
+                                    title: 'Ubicación GPS',
+                                    message: 'No se pudo obtener la ubicación GPS. Verifique permisos.',
+                                    type: EcoNotificationType.warning,
                                   );
                                 }
                               }
@@ -694,31 +689,19 @@ class _AlertFormDialogState extends State<AlertFormDialog> {
 
       if (success) {
         // Mostrar aviso de éxito
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFF10B981),
-            content: Row(
-              children: [
-                const Icon(Icons.check_circle, color: Colors.white),
-                const SizedBox(width: 8),
-                Text(
-                  '¡Alerta ambiental registrada correctamente!',
-                  style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.w600),
-                ),
-              ],
-            ),
-          ),
+        EcoNotification.show(
+          context,
+          title: 'Alerta Registrada',
+          message: '¡Alerta ambiental registrada correctamente!',
+          type: EcoNotificationType.success,
         );
         Navigator.of(context).pop();
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.redAccent,
-            content: Text(
-              'Ocurrió un error al registrar la alerta. Inténtelo nuevamente.',
-              style: GoogleFonts.outfit(color: Colors.white),
-            ),
-          ),
+        EcoNotification.show(
+          context,
+          title: 'Error de Envío',
+          message: 'Ocurrió un error al registrar la alerta. Inténtelo nuevamente.',
+          type: EcoNotificationType.error,
         );
       }
     }

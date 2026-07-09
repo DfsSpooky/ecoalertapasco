@@ -12,6 +12,7 @@ import 'alert_form_dialog.dart';
 import 'auth_dialog.dart';
 import 'pulsing_critical_dot.dart';
 import 'package:file_picker/file_picker.dart';
+import 'eco_notification.dart';
 
 class EcoMapView extends StatefulWidget {
   const EcoMapView({super.key});
@@ -1049,28 +1050,20 @@ class _EcoMapViewState extends State<EcoMapView> {
                             _mapController.move(latLng, 16.0);
                             appState.updateTempLocation(latLng.latitude, latLng.longitude);
                             if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  backgroundColor: const Color(0xFF0288D1),
-                                  duration: const Duration(seconds: 2),
-                                  content: Text(
-                                    'Mapa centrado en tu ubicación GPS.',
-                                    style: GoogleFonts.outfit(color: Colors.white),
-                                  ),
-                                ),
+                              EcoNotification.show(
+                                context,
+                                title: 'GPS Centrado',
+                                message: 'Mapa centrado en tu ubicación GPS.',
+                                type: EcoNotificationType.info,
                               );
                             }
                           } else {
                             if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  backgroundColor: Colors.amber.shade800,
-                                  duration: const Duration(seconds: 3),
-                                  content: Text(
-                                    'No se pudo obtener la ubicación. Verifique los permisos GPS.',
-                                    style: GoogleFonts.outfit(color: Colors.white),
-                                  ),
-                                ),
+                              EcoNotification.show(
+                                context,
+                                title: 'GPS Error',
+                                message: 'No se pudo obtener la ubicación. Verifique los permisos GPS.',
+                                type: EcoNotificationType.warning,
                               );
                             }
                           }
@@ -2114,14 +2107,11 @@ class _AlertDetailCard extends StatelessWidget {
                           isUploading = false;
                         });
                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                'Error al subir la imagen. Inténtelo de nuevo.',
-                                style: GoogleFonts.outfit(),
-                              ),
-                              backgroundColor: const Color(0xFFEF4444),
-                            ),
+                          EcoNotification.show(
+                            context,
+                            title: 'Error de Imagen',
+                            message: 'Error al subir la imagen. Inténtelo de nuevo.',
+                            type: EcoNotificationType.error,
                           );
                         }
                         return;
@@ -2136,14 +2126,11 @@ class _AlertDetailCard extends StatelessWidget {
                       if (context.mounted) {
                         Navigator.pop(context);
                         onClose();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              success ? 'Incidente resuelto con evidencia.' : 'Error al guardar la resolución.',
-                              style: GoogleFonts.outfit(),
-                            ),
-                            backgroundColor: success ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                          ),
+                        EcoNotification.show(
+                          context,
+                          title: success ? 'Incidente Resuelto' : 'Error al Resolver',
+                          message: success ? 'Incidente resuelto con evidencia.' : 'Error al guardar la resolución.',
+                          type: success ? EcoNotificationType.success : EcoNotificationType.error,
                         );
                       }
                     },
@@ -2248,16 +2235,11 @@ class _AlertDetailCard extends StatelessWidget {
                       if (context.mounted) {
                         Navigator.pop(context);
                         onClose();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            backgroundColor: success ? const Color(0xFF0288D1) : const Color(0xFFEF4444),
-                            content: Text(
-                              success
-                                  ? 'Caso reenviado con éxito.'
-                                  : 'Fallo al reenviar el caso.',
-                              style: GoogleFonts.outfit(fontWeight: FontWeight.bold),
-                            ),
-                          ),
+                        EcoNotification.show(
+                          context,
+                          title: success ? 'Caso Reenviado' : 'Error de Reenvío',
+                          message: success ? 'Caso reenviado con éxito.' : 'Fallo al reenviar el caso.',
+                          type: success ? EcoNotificationType.success : EcoNotificationType.error,
                         );
                       }
                     },
@@ -2337,16 +2319,11 @@ class _AlertDetailCard extends StatelessWidget {
                       if (context.mounted) {
                         Navigator.pop(context);
                         onClose();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            backgroundColor: success ? const Color(0xFF64748B) : const Color(0xFFEF4444),
-                            content: Text(
-                              success
-                                  ? 'Reporte descartado y ocultado.'
-                                  : 'Fallo al descartar el reporte.',
-                              style: GoogleFonts.outfit(fontWeight: FontWeight.bold),
-                            ),
-                          ),
+                        EcoNotification.show(
+                          context,
+                          title: success ? 'Reporte Descartado' : 'Error al Descartar',
+                          message: success ? 'Reporte descartado y ocultado.' : 'Fallo al descartar el reporte.',
+                          type: success ? EcoNotificationType.info : EcoNotificationType.error,
                         );
                       }
                     },

@@ -402,6 +402,11 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  void setDefaultUserLocation() {
+    _userLocation = const LatLng(-10.6675, -76.2567);
+    notifyListeners();
+  }
+
   // Deducir distrito basado en coordenadas
   EcoDistrict _deduceDistrict(double lat, double lng) {
     double minDistance = double.infinity;

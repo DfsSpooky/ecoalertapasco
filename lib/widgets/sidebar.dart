@@ -5,6 +5,7 @@ import '../models/eco_alert.dart';
 import '../state/app_state.dart';
 import 'stat_charts.dart';
 import 'auth_dialog.dart';
+import 'eco_notification.dart';
 
 class LeftSidebar extends StatelessWidget {
   const LeftSidebar({super.key});
@@ -753,23 +754,11 @@ class _EmergencySimulatorCard extends StatelessWidget {
           ElevatedButton.icon(
             onPressed: () {
               Provider.of<AppState>(context, listen: false).simulateEmergency();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: const Color(0xFFDC2626),
-                  duration: const Duration(seconds: 4),
-                  content: Row(
-                    children: [
-                      const Icon(Icons.warning_amber_rounded, color: Colors.white),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '¡Simulación de Emergencia Crítica lanzada en Cerro de Pasco!',
-                          style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+              EcoNotification.show(
+                context,
+                title: 'Alerta de Emergencia',
+                message: '¡Simulación de Emergencia Crítica lanzada en Cerro de Pasco!',
+                type: EcoNotificationType.warning,
               );
             },
             icon: const Icon(Icons.emergency_rounded, color: Colors.white, size: 16),
@@ -1342,17 +1331,7 @@ class _ProximityFilterSection extends StatelessWidget {
                   if (val) {
                     final pos = await appState.getUserLatLng();
                     if (pos == null) {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'No se pudo acceder a tu ubicación GPS. Verifica los permisos de tu navegador.',
-                            ),
-                          ),
-                        );
-                      }
-                      appState.setProximityFilterActive(false);
-                      return;
+                      appState.setDefaultUserLocation();
                     }
                   }
                   appState.setProximityFilterActive(val);

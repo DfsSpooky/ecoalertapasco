@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import '../models/eco_alert.dart';
 import '../state/app_state.dart';
 import 'pulsing_critical_dot.dart';
+import 'eco_notification.dart';
 
 class AuthorityDashboardView extends StatefulWidget {
   const AuthorityDashboardView({super.key});
@@ -854,11 +855,11 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
                                                 appState.showAuthorityDashboard = false;
                                                 appState.setDistrict(alert.district);
                                                 appState.selectedAlert = alert;
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  SnackBar(
-                                                    backgroundColor: const Color(0xFF0288D1),
-                                                    content: Text('Enfocando en: ${alert.title}', style: GoogleFonts.outfit()),
-                                                  ),
+                                                EcoNotification.show(
+                                                  context,
+                                                  title: 'Mapa Centrado',
+                                                  message: 'Enfocando en: ${alert.title}',
+                                                  type: EcoNotificationType.info,
                                                 );
                                               },
                                             ),
@@ -1977,16 +1978,11 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
 
                       if (context.mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            backgroundColor: success ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                            content: Text(
-                              success
-                                  ? 'Caso marcado como Solucionado con éxito.'
-                                  : 'Fallo al registrar la resolución.',
-                              style: GoogleFonts.outfit(fontWeight: FontWeight.bold),
-                            ),
-                          ),
+                        EcoNotification.show(
+                          context,
+                          title: success ? 'Incidente Resuelto' : 'Error al Resolver',
+                          message: success ? 'Caso marcado como Solucionado con éxito.' : 'Fallo al registrar la resolución.',
+                          type: success ? EcoNotificationType.success : EcoNotificationType.error,
                         );
                       }
                     },
@@ -2091,16 +2087,11 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
 
                       if (context.mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            backgroundColor: success ? const Color(0xFF0288D1) : const Color(0xFFEF4444),
-                            content: Text(
-                              success
-                                  ? 'Caso reenviado con éxito.'
-                                  : 'Fallo al reenviar el caso.',
-                              style: GoogleFonts.outfit(fontWeight: FontWeight.bold),
-                            ),
-                          ),
+                        EcoNotification.show(
+                          context,
+                          title: success ? 'Caso Reenviado' : 'Error de Reenvío',
+                          message: success ? 'Caso reenviado con éxito.' : 'Fallo al reenviar el caso.',
+                          type: success ? EcoNotificationType.success : EcoNotificationType.error,
                         );
                       }
                     },
@@ -2179,16 +2170,11 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
 
                       if (context.mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            backgroundColor: success ? const Color(0xFF64748B) : const Color(0xFFEF4444),
-                            content: Text(
-                              success
-                                  ? 'Reporte descartado y ocultado.'
-                                  : 'Fallo al descartar el reporte.',
-                              style: GoogleFonts.outfit(fontWeight: FontWeight.bold),
-                            ),
-                          ),
+                        EcoNotification.show(
+                          context,
+                          title: success ? 'Reporte Descartado' : 'Error al Descartar',
+                          message: success ? 'Reporte descartado y ocultado.' : 'Fallo al descartar el reporte.',
+                          type: success ? EcoNotificationType.info : EcoNotificationType.error,
                         );
                       }
                     },

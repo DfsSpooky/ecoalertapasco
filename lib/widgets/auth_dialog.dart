@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../state/app_state.dart';
+import 'eco_notification.dart';
 
 class AuthDialog extends StatefulWidget {
   const AuthDialog({super.key});
@@ -94,25 +95,19 @@ class _AuthDialogState extends State<AuthDialog> with SingleTickerProviderStateM
 
     if (mounted) {
       if (success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFF10B981),
-            content: Text(
-              '¡Bienvenido de nuevo, $username!',
-              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
-            ),
-          ),
+        EcoNotification.show(
+          context,
+          title: 'Sesión Iniciada',
+          message: '¡Bienvenido de nuevo, $username!',
+          type: EcoNotificationType.success,
         );
         Navigator.pop(context);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFFEF4444),
-            content: Text(
-              'Usuario o contraseña incorrectos.',
-              style: GoogleFonts.outfit(color: Colors.white),
-            ),
-          ),
+        EcoNotification.show(
+          context,
+          title: 'Error de Acceso',
+          message: 'Usuario o contraseña incorrectos.',
+          type: EcoNotificationType.error,
         );
       }
     }
@@ -137,25 +132,19 @@ class _AuthDialogState extends State<AuthDialog> with SingleTickerProviderStateM
 
     if (mounted) {
       if (success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFF10B981),
-            content: Text(
-              'Cuenta creada con éxito. ¡Bienvenido, $username!',
-              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
-            ),
-          ),
+        EcoNotification.show(
+          context,
+          title: 'Registro Completo',
+          message: 'Cuenta creada con éxito. ¡Bienvenido, $username!',
+          type: EcoNotificationType.success,
         );
         Navigator.pop(context);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFFEF4444),
-            content: Text(
-              'Error al registrarse. El usuario o correo ya podría estar en uso.',
-              style: GoogleFonts.outfit(color: Colors.white),
-            ),
-          ),
+        EcoNotification.show(
+          context,
+          title: 'Error de Registro',
+          message: 'Error al registrarse. El usuario o correo ya podría estar en uso.',
+          type: EcoNotificationType.error,
         );
       }
     }
