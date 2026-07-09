@@ -132,6 +132,10 @@ class LeftSidebar extends StatelessWidget {
                   const _DistrictFilterRow(),
                   const SizedBox(height: 24),
 
+                  // Filtro de Cercanía Section
+                  const _ProximityFilterSection(),
+                  const SizedBox(height: 24),
+
                   // Rango Temporal Section
                   _buildSectionHeader('RANGO TEMPORAL'),
                   const SizedBox(height: 12),
@@ -1301,6 +1305,106 @@ class _DismissedFilterRow extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ProximityFilterSection extends StatelessWidget {
+  const _ProximityFilterSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final appState = Provider.of<AppState>(context);
+    final isActive = appState.isProximityFilterActive;
+    final radius = appState.proximityRadius;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'FILTRO DE CERCANÍA',
+              style: GoogleFonts.outfit(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: const Color(0xFF64748B),
+                letterSpacing: 1.0,
+              ),
+            ),
+            Transform.scale(
+              scale: 0.8,
+              child: Switch(
+                value: isActive,
+                activeColor: const Color(0xFF0288D1),
+                onChanged: (val) async {
+                  if (val) {
+                    final pos = await appState.getUserLatLng();
+                    if (pos == null) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'No se pudo acceder a tu ubicación GPS. Verifica los permisos de tu navegador.',
+                            ),
+                          ),
+                        );
+                      }
+                      appState.setProximityFilterActive(false);
+                      return;
+                    }
+                  }
+                  appState.setProximityFilterActive(val);
+                },
+              ),
+            ),
+          ],
+        ),
+        if (isActive) ...[
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Mostrar alertas en un radio de:',
+                style: GoogleFonts.outfit(
+                  color: const Color(0xFF64748B),
+                  fontSize: 12,
+                ),
+              ),
+              Text(
+                radius >= 1000
+                    ? '${(radius / 1000).toStringAsFixed(1)} km'
+                    : '${radius.round()} m',
+                style: GoogleFonts.outfit(
+                  color: const Color(0xFF0288D1),
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: const Color(0xFF0288D1),
+              inactiveTrackColor: const Color(0xFFE2E8F0),
+              thumbColor: const Color(0xFF0288D1),
+              overlayColor: const Color(0xFF0288D1).withOpacity(0.12),
+              trackHeight: 4,
+            ),
+            child: Slider(
+              value: radius,
+              min: 100.0,
+              max: 5000.0,
+              divisions: 49,
+              onChanged: (val) {
+                appState.setProximityRadius(val);
+              },
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

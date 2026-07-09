@@ -27,6 +27,7 @@ class _EcoMapViewState extends State<EcoMapView> {
   bool _isDarkMap = false; // MODO CLARO por defecto según pedido del usuario
   bool _isListExpanded = true;
   bool _showWasteLayer = false;
+  bool _showDistrictBoundaries = false;
 
   @override
   void dispose() {
@@ -548,6 +549,63 @@ class _EcoMapViewState extends State<EcoMapView> {
                       ],
                     ),
 
+                  // Capa de Límites Poligonales de Distritos
+                  if (_showDistrictBoundaries)
+                    PolygonLayer(
+                      polygons: [
+                        // Chaupimarca (Centro/Sur - Color Ámbar)
+                        Polygon(
+                          points: const [
+                            LatLng(-10.6800, -76.2650),
+                            LatLng(-10.6655, -76.2630),
+                            LatLng(-10.6655, -76.2480),
+                            LatLng(-10.6800, -76.2480),
+                          ],
+                          color: const Color(0xFFFFB74D).withOpacity(0.12),
+                          borderColor: const Color(0xFFFB8C00),
+                          borderStrokeWidth: 2.0,
+                        ),
+                        // Yanacancha (Norte - Color Azul)
+                        Polygon(
+                          points: const [
+                            LatLng(-10.6655, -76.2630),
+                            LatLng(-10.6500, -76.2630),
+                            LatLng(-10.6500, -76.2450),
+                            LatLng(-10.6655, -76.2450),
+                          ],
+                          color: const Color(0xFF64B5F6).withOpacity(0.12),
+                          borderColor: const Color(0xFF1E88E5),
+                          borderStrokeWidth: 2.0,
+                        ),
+                        // Simón Bolívar (Oeste - Color Verde)
+                        Polygon(
+                          points: const [
+                            LatLng(-10.6800, -76.2800),
+                            LatLng(-10.6500, -76.2800),
+                            LatLng(-10.6500, -76.2630),
+                            LatLng(-10.6800, -76.2630),
+                          ],
+                          color: const Color(0xFF81C784).withOpacity(0.12),
+                          borderColor: const Color(0xFF43A047),
+                          borderStrokeWidth: 2.0,
+                        ),
+                      ],
+                    ),
+
+                  if (appState.isProximityFilterActive && appState.userLocation != null)
+                    CircleLayer(
+                      circles: [
+                        CircleMarker(
+                          point: appState.userLocation!,
+                          radius: appState.proximityRadius,
+                          useRadiusInMeter: true,
+                          color: const Color(0xFF0288D1).withOpacity(0.08),
+                          borderColor: const Color(0xFF0288D1).withOpacity(0.45),
+                          borderStrokeWidth: 1.5,
+                        ),
+                      ],
+                    ),
+
                   MarkerLayer(markers: markers),
                 ],
               ),
@@ -904,6 +962,50 @@ class _EcoMapViewState extends State<EcoMapView> {
                           onPressed: () {
                             setState(() {
                               _showWasteLayer = !_showWasteLayer;
+                            });
+                          },
+                        ),
+                      ),
+
+                    // Botón de Límites de Distritos
+                    if (!appState.isReportMode)
+                      Container(
+                        margin: const EdgeInsets.only(right: 8),
+                        decoration: BoxDecoration(
+                          color: _showDistrictBoundaries ? const Color(0xFFFFF3E0) : Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _showDistrictBoundaries ? const Color(0xFFFF9800) : const Color(0xFFE2E8F0),
+                            width: 1.5,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.08),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            )
+                          ],
+                        ),
+                        child: TextButton.icon(
+                          icon: Icon(
+                            Icons.map_outlined,
+                            color: _showDistrictBoundaries ? const Color(0xFFFF9800) : const Color(0xFF64748B),
+                            size: 16,
+                          ),
+                          label: Text(
+                            '🗺️ Límites Distritos',
+                            style: GoogleFonts.outfit(
+                              color: _showDistrictBoundaries ? const Color(0xFFFF9800) : const Color(0xFF475569),
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              _showDistrictBoundaries = !_showDistrictBoundaries;
                             });
                           },
                         ),

@@ -152,4 +152,18 @@ REST_FRAMEWORK = {
     ],
 }
 
-CORS_ALLOW_ALL_ORIGINS = True
+# Permitir todos los orígenes solo en desarrollo (DEBUG=True)
+# En producción, configurar los orígenes específicos a través de variables de entorno o dominios conocidos
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOWED_ORIGINS = [
+        "http://ecoalerta.local",
+        "http://api.ecoalerta.local",
+        "https://ecoalerta.tudominio.com",
+    ]
+    # Permitir que se defina mediante variable de entorno FRONTEND_URL si está disponible
+    frontend_url = os.environ.get("FRONTEND_URL")
+    if frontend_url:
+        CORS_ALLOWED_ORIGINS.append(frontend_url)

@@ -18,6 +18,47 @@ class AlertViewSet(viewsets.ModelViewSet):
     queryset = Alert.objects.all().order_by('-created_at')
     serializer_class = AlertSerializer
 
+    def get_queryset(self):
+        queryset = Alert.objects.all().order_by('-created_at')
+        lat_str = self.request.query_params.get('lat')
+        lng_str = self.request.query_params.get('lng')
+        radius_str = self.request.query_params.get('radius') # en metros
+        
+        if lat_str and lng_str and radius_str:
+            try:
+                lat = float(lat_str)
+                lng = float(lng_str)
+                radius = float(radius_str)
+                
+                # Aproximación del bounding box (1 grado latitud ~ 111,000 metros)
+                lat_delta = radius / 111000.0
+                import math
+                lng_delta = radius / (111000.0 * math.cos(math.radians(lat)))
+                
+                min_lat, max_lat = lat - lat_delta, lat + lat_delta
+                min_lng, max_lng = lng - lng_delta, lng + lng_delta
+                
+                # Bounding box filter (compatible con SQLite y Postgres)
+                queryset = queryset.filter(
+                    latitude__range=(min_lat, max_lat),
+                    longitude__range=(min_lng, max_lng)
+                )
+                
+                # Circular filter (Haversine)
+                def distance_meters(alat, alng):
+                    R = 6371000.0
+                    dlat = math.radians(alat - lat)
+                    dlng = math.radians(alng - lng)
+                    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat)) * math.cos(math.radians(alat)) * math.sin(dlng/2)**2
+                    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+                    return R * c
+                
+                matching_ids = [alert.id for alert in queryset if distance_meters(alert.latitude, alert.longitude) <= radius]
+                queryset = queryset.filter(id__in=matching_ids)
+            except ValueError:
+                pass
+        return queryset
+
     def get_permissions(self):
         if self.action in ['create', 'partial_update', 'update']:
             return [permissions.IsAuthenticated()]
@@ -136,3 +177,25 @@ class ImageUploadView(APIView):
         file_name = default_storage.save(os.path.join('uploads', file_obj.name), file_obj)
         file_url = request.build_absolute_uri(settings.MEDIA_URL + file_name)
         return Response({'url': file_url})
+
+import time
+from django.http import StreamingHttpResponse
+
+def alerts_sse_stream(request):
+    def event_stream():
+        last_id = None
+        while True:
+            try:
+                latest = Alert.objects.latest('id')
+                if last_id != latest.id:
+                    last_id = latest.id
+                    yield "data: refresh\n\n"
+            except Alert.DoesNotExist:
+                pass
+            time.sleep(2)
+            
+    response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+    response['Cache-Control'] = 'no-cache'
+    response['X-Accel-Buffering'] = 'no' # Evitar buffer en Nginx/Traefik
+    response['Access-Control-Allow-Origin'] = '*'
+    return response

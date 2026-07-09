@@ -29,11 +29,51 @@ class DjangoAlertService implements EcoAlertService {
   String? _token;
 
   DjangoAlertService() {
-    _startPolling();
+    _initConnection();
+  }
+
+  void _initConnection() {
+    _fetchAndEmit();
+    _startSse();
+  }
+
+  // Cliente SSE multiplataforma basado en streams HTTP
+  Future<void> _startSse() async {
+    final client = http.Client();
+    final request = http.Request('GET', Uri.parse('${baseUrl}sse/'));
+    request.headers['Accept'] = 'text/event-stream';
+    request.headers['Cache-Control'] = 'no-cache';
+
+    try {
+      final response = await client.send(request);
+      if (response.statusCode == 200) {
+        // SSE Conectado con éxito: escuchar flujo de líneas decodificadas por renglón
+        utf8.decoder
+            .bind(response.stream)
+            .transform(const LineSplitter())
+            .listen((line) {
+          if (line.contains('data: refresh')) {
+            _fetchAndEmit();
+          }
+        }, onError: (e) {
+          client.close();
+          _startPolling();
+        }, onDone: () {
+          client.close();
+          _startPolling();
+        });
+      } else {
+        client.close();
+        _startPolling();
+      }
+    } catch (e) {
+      client.close();
+      _startPolling();
+    }
   }
 
   void _startPolling() {
-    _fetchAndEmit();
+    if (_pollTimer != null && _pollTimer!.isActive) return;
     _pollTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
       _fetchAndEmit();
     });

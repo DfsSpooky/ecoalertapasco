@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -41,6 +42,8 @@ class AppState extends ChangeNotifier {
   EcoAlert? _activeEmergencyAlert;
 
   LatLng? _userLocation;
+  bool _isProximityFilterActive = false;
+  double _proximityRadius = 1000.0; // en metros
 
   // Campos de autenticación
   String? _authToken;
@@ -125,6 +128,8 @@ class AppState extends ChangeNotifier {
   double? get tempLatitude => _tempLatitude;
   double? get tempLongitude => _tempLongitude;
   LatLng? get userLocation => _userLocation;
+  bool get isProximityFilterActive => _isProximityFilterActive;
+  double get proximityRadius => _proximityRadius;
   
   EcoAlert? get activeEmergencyAlert => _activeEmergencyAlert;
 
@@ -232,6 +237,16 @@ class AppState extends ChangeNotifier {
       final dateMatches = _daysFilter == 0 ||
           alert.createdAt.isAfter(DateTime.now().subtract(Duration(days: _daysFilter)));
           
+      if (_isProximityFilterActive && _userLocation != null) {
+        final dist = _calculateDistance(
+          _userLocation!.latitude,
+          _userLocation!.longitude,
+          alert.latitude,
+          alert.longitude,
+        );
+        if (dist > _proximityRadius) return false;
+      }
+          
       return categoryMatches && severityMatches && queryMatches && districtMatches && dateMatches;
     }).toList();
   }
@@ -246,6 +261,24 @@ class AppState extends ChangeNotifier {
   void setDistrict(EcoDistrict? district) {
     _selectedDistrict = district;
     notifyListeners();
+  }
+
+  void setProximityFilterActive(bool val) {
+    _isProximityFilterActive = val;
+    notifyListeners();
+  }
+
+  void setProximityRadius(double val) {
+    _proximityRadius = val;
+    notifyListeners();
+  }
+
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const p = 0.017453292519943295; // pi / 180
+    final a = 0.5 - math.cos((lat2 - lat1) * p) / 2 +
+        math.cos(lat1 * p) * math.cos(lat2 * p) *
+        (1 - math.cos((lon2 - lon1) * p)) / 2;
+    return 12742000 * math.asin(math.sqrt(a)); // 2 * R; R = 6371000 meters
   }
 
   // Cambiar texto de búsqueda
