@@ -83,7 +83,20 @@ DATABASES = {
     }
 }
 
-if os.environ.get("DB_HOST"):
+db_url = os.environ.get("DATABASE_URL") or os.environ.get("DB_HOST")
+
+if db_url and (db_url.startswith("postgres://") or db_url.startswith("postgresql://")):
+    from urllib.parse import urlparse
+    url = urlparse(db_url)
+    DATABASES["default"] = {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": url.path[1:] if url.path else "postgres",
+        "USER": url.username or "postgres",
+        "PASSWORD": url.password or "",
+        "HOST": url.hostname or "localhost",
+        "PORT": url.port or 5432,
+    }
+elif os.environ.get("DB_HOST"):
     DATABASES["default"] = {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": os.environ.get("DB_NAME", "ecoalerta"),
