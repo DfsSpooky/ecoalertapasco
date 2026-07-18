@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'package:latlong2/latlong.dart';
 import '../models/eco_alert.dart';
+import '../models/waste_point.dart';
 import 'eco_alert_service.dart';
 
 class MockAlertService implements EcoAlertService {
@@ -270,4 +272,93 @@ class MockAlertService implements EcoAlertService {
 
   @override
   void setToken(String? token) {}
+
+  @override
+  Future<List<WastePoint>> fetchWastePoints() async {
+    return const [
+      WastePoint(
+        id: 'waste-1',
+        name: 'Contenedor Plaza Yanacancha',
+        description: 'Plaza Principal de Yanacancha. Puntos de separación esmeralda.',
+        location: LatLng(-10.6625, -76.2555),
+        type: WasteType.recyclable,
+        fillLevel: FillLevel.low,
+        truckSchedule: 'Lunes, Miércoles y Viernes a las 19:00',
+      ),
+      WastePoint(
+        id: 'waste-2',
+        name: 'Punto de Acopio Av. Los Próceres',
+        description: 'Cerca al mercado local. Depósitos de residuos orgánicos municipales.',
+        location: LatLng(-10.6640, -76.2530),
+        type: WasteType.organic,
+        fillLevel: FillLevel.medium,
+        truckSchedule: 'Martes, Jueves y Sábado a las 18:30',
+      ),
+      WastePoint(
+        id: 'waste-3',
+        name: 'Contenedor General Hospital Huariaca',
+        description: 'Residuos generales municipales no peligrosos.',
+        location: LatLng(-10.6685, -76.2580),
+        type: WasteType.general,
+        fillLevel: FillLevel.full,
+        truckSchedule: 'Diario (Lunes a Domingo) a las 08:00',
+      ),
+      WastePoint(
+        id: 'waste-4',
+        name: 'Contenedor Plaza Quiulacocha',
+        description: 'Residuos generales. Punto de acopio del distrito Simón Bolívar.',
+        location: LatLng(-10.6720, -76.2625),
+        type: WasteType.general,
+        fillLevel: FillLevel.medium,
+        truckSchedule: 'Lunes y Jueves a las 14:00',
+      ),
+      WastePoint(
+        id: 'waste-5',
+        name: 'Punto Limpio Av. Bolívar Central',
+        description: 'Contenedores verdes para reciclaje de papel, plástico y vidrio.',
+        location: LatLng(-10.6705, -76.2600),
+        type: WasteType.recyclable,
+        fillLevel: FillLevel.low,
+        truckSchedule: 'Martes y Sábado a las 16:00',
+      ),
+      WastePoint(
+        id: 'waste-6',
+        name: 'Botadero Municipal San Juan',
+        description: 'Punto de acopio municipal oficial en el Sector San Juan. Autorizado para depositar bolsas de basura domésticas.',
+        location: LatLng(-10.6750, -76.2520),
+        type: WasteType.municipalDump,
+        fillLevel: FillLevel.medium,
+        truckSchedule: 'Recolección diaria por camión municipal compactador a las 20:00',
+      ),
+      WastePoint(
+        id: 'waste-7',
+        name: 'Botadero Oficial Yanacancha Alta',
+        description: 'Botadero autorizado y supervisado por la Municipalidad Distrital de Yanacancha. Depósito seguro de bolsas de basura.',
+        location: LatLng(-10.6580, -76.2480),
+        type: WasteType.municipalDump,
+        fillLevel: FillLevel.low,
+        truckSchedule: 'Lunes, Miércoles y Viernes a las 22:00',
+      ),
+      WastePoint(
+        id: 'waste-8',
+        name: 'Punto de Desecho Simón Bolívar (La Esperanza)',
+        description: 'Punto limpio oficial municipal. Contenedor de gran capacidad para almacenamiento temporal de bolsas de basura.',
+        location: LatLng(-10.6690, -76.2710),
+        type: WasteType.municipalDump,
+        fillLevel: FillLevel.full,
+        truckSchedule: 'Diario a las 06:00',
+      ),
+    ];
+  }
+
+  @override
+  Future<List<LatLng>> fetchCollectorRoute() async {
+    return const [
+      LatLng(-10.6625, -76.2555), // Plaza Yanacancha
+      LatLng(-10.6640, -76.2530), // Av. Los Próceres
+      LatLng(-10.6685, -76.2580), // Hospital Huariaca
+      LatLng(-10.6705, -76.2600), // Av. Bolívar Central
+      LatLng(-10.6720, -76.2625), // Plaza Quiulacocha
+    ];
+  }
 }

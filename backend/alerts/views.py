@@ -317,3 +317,20 @@ def alerts_sse_stream(request):
     response['X-Accel-Buffering'] = 'no' # Evitar buffer en Nginx/Traefik
     response['Access-Control-Allow-Origin'] = '*'
     return response
+
+
+from rest_framework import viewsets
+from .models import CollectorRoutePoint, MunicipalDump
+from .serializers import CollectorRoutePointSerializer, MunicipalDumpSerializer
+
+class CollectorRoutePointViewSet(viewsets.ModelViewSet):
+    queryset = CollectorRoutePoint.objects.all().order_by('order')
+    serializer_class = CollectorRoutePointSerializer
+    permission_classes = [permissions.AllowAny]
+
+
+class MunicipalDumpViewSet(viewsets.ModelViewSet):
+    queryset = MunicipalDump.objects.all()
+    serializer_class = MunicipalDumpSerializer
+    permission_classes = [permissions.AllowAny]
+

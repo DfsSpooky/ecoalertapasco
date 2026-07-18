@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:latlong2/latlong.dart';
 import '../models/eco_alert.dart';
+import '../models/waste_point.dart';
 import 'eco_alert_service.dart';
 
 class SupabaseAlertService implements EcoAlertService {
@@ -73,4 +75,14 @@ class SupabaseAlertService implements EcoAlertService {
 
   @override
   void setToken(String? token) {}
+
+  @override
+  Future<List<WastePoint>> fetchWastePoints() async {
+    return [];
+  }
+
+  @override
+  Future<List<LatLng>> fetchCollectorRoute() async {
+    return [];
+  }
 }

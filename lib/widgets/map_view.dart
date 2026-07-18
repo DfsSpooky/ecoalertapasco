@@ -37,63 +37,7 @@ class _EcoMapViewState extends State<EcoMapView> {
     super.dispose();
   }
 
-  // Datos simulados de Contenedores y Botaderos en Cerro de Pasco
-  final List<WastePoint> _wastePoints = [
-    const WastePoint(
-      id: 'waste-1',
-      name: 'Contenedor Plaza Yanacancha',
-      description: 'Plaza Principal de Yanacancha. Puntos de separación esmeralda.',
-      location: LatLng(-10.6625, -76.2555),
-      type: WasteType.recyclable,
-      fillLevel: FillLevel.low,
-      truckSchedule: 'Lunes, Miércoles y Viernes a las 19:00',
-    ),
-    const WastePoint(
-      id: 'waste-2',
-      name: 'Punto de Acopio Av. Los Próceres',
-      description: 'Cerca al mercado local. Depósitos de residuos orgánicos municipales.',
-      location: LatLng(-10.6640, -76.2530),
-      type: WasteType.organic,
-      fillLevel: FillLevel.medium,
-      truckSchedule: 'Martes, Jueves y Sábado a las 18:30',
-    ),
-    const WastePoint(
-      id: 'waste-3',
-      name: 'Contenedor General Hospital Huariaca',
-      description: 'Residuos generales municipales no peligrosos.',
-      location: LatLng(-10.6685, -76.2580),
-      type: WasteType.general,
-      fillLevel: FillLevel.full,
-      truckSchedule: 'Diario (Lunes a Domingo) a las 08:00',
-    ),
-    const WastePoint(
-      id: 'waste-4',
-      name: 'Contenedor Plaza Quiulacocha',
-      description: 'Residuos generales. Punto de acopio del distrito Simón Bolívar.',
-      location: LatLng(-10.6720, -76.2625),
-      type: WasteType.general,
-      fillLevel: FillLevel.medium,
-      truckSchedule: 'Lunes y Jueves a las 14:00',
-    ),
-    const WastePoint(
-      id: 'waste-5',
-      name: 'Punto Limpio Av. Bolívar Central',
-      description: 'Contenedores verdes para reciclaje de papel, plástico y vidrio.',
-      location: LatLng(-10.6705, -76.2600),
-      type: WasteType.recyclable,
-      fillLevel: FillLevel.low,
-      truckSchedule: 'Martes y Sábado a las 16:00',
-    ),
-  ];
 
-  // Coordenadas que trazan la ruta del camión recolector de basura (para polilínea)
-  final List<LatLng> _truckRoutePoints = const [
-    LatLng(-10.6625, -76.2555), // Plaza Yanacancha
-    LatLng(-10.6640, -76.2530), // Av. Los Próceres
-    LatLng(-10.6685, -76.2580), // Hospital Huariaca
-    LatLng(-10.6705, -76.2600), // Av. Bolívar Central
-    LatLng(-10.6720, -76.2625), // Plaza Quiulacocha
-  ];
 
   void _showAuthDialog(BuildContext context) {
     showDialog(
@@ -161,6 +105,10 @@ class _EcoMapViewState extends State<EcoMapView> {
             wasteText = 'Residuos Generales 🗑️ (No reciclables)';
             wasteColor = const Color(0xFF37474F);
             break;
+          case WasteType.municipalDump:
+            wasteText = 'Botadero Municipal Oficial 🛢️ (Depósito de bolsas de basura)';
+            wasteColor = const Color(0xFFD84315);
+            break;
         }
 
         return Container(
@@ -208,6 +156,37 @@ class _EcoMapViewState extends State<EcoMapView> {
                   color: const Color(0xFF64748B),
                 ),
               ),
+              if (point.imageUrl != null && point.imageUrl!.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.network(
+                    point.imageUrl!.startsWith('http')
+                        ? point.imageUrl!
+                        : (() {
+                            const String envUrl = String.fromEnvironment('BACKEND_URL');
+                            final String host = envUrl.isNotEmpty ? envUrl : 'http://localhost:8000';
+                            final cleanedHost = host.endsWith('/') ? host.substring(0, host.length - 1) : host;
+                            final cleanedUrl = point.imageUrl!.startsWith('/') ? point.imageUrl! : '/${point.imageUrl!}';
+                            return '$cleanedHost$cleanedUrl';
+                          })(),
+                    height: 160,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      height: 160,
+                      color: const Color(0xFFF1F5F9),
+                      child: const Center(
+                        child: Icon(
+                          Icons.broken_image_rounded,
+                          color: Color(0xFF94A3B8),
+                          size: 32,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               const Divider(color: Color(0xFFE2E8F0)),
               const SizedBox(height: 16),
@@ -364,28 +343,30 @@ class _EcoMapViewState extends State<EcoMapView> {
         ? 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'
         : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
-    // Generar marcadores
-    final List<Marker> markers = alerts.map((alert) {
-      return Marker(
-        point: LatLng(alert.latitude, alert.longitude),
-        width: 42,
-        height: 42,
-        child: GestureDetector(
-          onTap: () {
-            appState.selectedAlert = alert;
-          },
-          child: _MapPin(
-            category: alert.category,
-            severity: alert.severity,
-            status: alert.status,
-            isSelected: appState.selectedAlert?.id == alert.id,
-          ),
-        ),
-      );
-    }).toList();
+    // Generar marcadores (ocultar alertas normales si mostramos la capa del recolector)
+    final List<Marker> markers = _showWasteLayer
+        ? []
+        : alerts.map((alert) {
+            return Marker(
+              point: LatLng(alert.latitude, alert.longitude),
+              width: 42,
+              height: 42,
+              child: GestureDetector(
+                onTap: () {
+                  appState.selectedAlert = alert;
+                },
+                child: _MapPin(
+                  category: alert.category,
+                  severity: alert.severity,
+                  status: alert.status,
+                  isSelected: appState.selectedAlert?.id == alert.id,
+                ),
+              ),
+            );
+          }).toList();
 
     final List<CircleMarker> heatmapCircles = [];
-    if (_showHeatmap) {
+    if (_showHeatmap && !_showWasteLayer) {
       for (final alert in alerts) {
         double radius;
         Color color;
@@ -461,7 +442,7 @@ class _EcoMapViewState extends State<EcoMapView> {
 
     // Agregar marcadores de contenedores si la capa está activa
     if (_showWasteLayer) {
-      for (final wp in _wastePoints) {
+      for (final wp in appState.wastePoints) {
         Color itemColor;
         IconData itemIcon;
         switch (wp.type) {
@@ -476,6 +457,10 @@ class _EcoMapViewState extends State<EcoMapView> {
           case WasteType.general:
             itemColor = const Color(0xFF37474F); // Grey/Slate
             itemIcon = Icons.delete_outline_rounded;
+            break;
+          case WasteType.municipalDump:
+            itemColor = const Color(0xFFD84315); // Deep Orange 800
+            itemIcon = Icons.delete_sweep_rounded;
             break;
         }
 
@@ -576,7 +561,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                     PolylineLayer(
                       polylines: [
                         Polyline(
-                          points: _truckRoutePoints,
+                          points: appState.truckRoutePoints,
                           color: const Color(0xFF2E7D32).withOpacity(0.55),
                           strokeWidth: 4.5,
                         ),

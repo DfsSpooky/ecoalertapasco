@@ -197,4 +197,108 @@ class Command(BaseCommand):
                     resolved_at=created_at + datetime.timedelta(hours=6)
                 )
                 
+        # Poblar MunicipalDump y CollectorRoutePoint
+        from alerts.models import CollectorRoutePoint, MunicipalDump
+
+        if force or not MunicipalDump.objects.exists():
+            self.stdout.write('Limpiando base de datos de contenedores y botaderos...')
+            MunicipalDump.objects.all().delete()
+            CollectorRoutePoint.objects.all().delete()
+
+            # Sembrar Contenedores y Botaderos Oficiales
+            dumps_data = [
+                # 5 Contenedores originales
+                {
+                    'name': 'Contenedor Plaza Yanacancha',
+                    'description': 'Plaza Principal de Yanacancha. Puntos de separación esmeralda.',
+                    'latitude': -10.6625,
+                    'longitude': -76.2555,
+                    'type': 'recyclable',
+                    'fill_level': 'low',
+                    'schedule': 'Lunes, Miércoles y Viernes a las 19:00',
+                },
+                {
+                    'name': 'Punto de Acopio Av. Los Próceres',
+                    'description': 'Cerca al mercado local. Depósitos de residuos orgánicos municipales.',
+                    'latitude': -10.6640,
+                    'longitude': -76.2530,
+                    'type': 'organic',
+                    'fill_level': 'medium',
+                    'schedule': 'Martes, Jueves y Sábado a las 18:30',
+                },
+                {
+                    'name': 'Contenedor General Hospital Huariaca',
+                    'description': 'Residuos generales municipales no peligrosos.',
+                    'latitude': -10.6685,
+                    'longitude': -76.2580,
+                    'type': 'general',
+                    'fill_level': 'full',
+                    'schedule': 'Diario (Lunes a Domingo) a las 08:00',
+                },
+                {
+                    'name': 'Contenedor Plaza Quiulacocha',
+                    'description': 'Residuos generales. Punto de acopio del distrito Simón Bolívar.',
+                    'latitude': -10.6720,
+                    'longitude': -76.2625,
+                    'type': 'general',
+                    'fill_level': 'medium',
+                    'schedule': 'Lunes y Jueves a las 14:00',
+                },
+                {
+                    'name': 'Punto Limpio Av. Bolívar Central',
+                    'description': 'Contenedores verdes para reciclaje de papel, plástico y vidrio.',
+                    'latitude': -10.6705,
+                    'longitude': -76.2600,
+                    'type': 'recyclable',
+                    'fill_level': 'low',
+                    'schedule': 'Martes y Sábado a las 16:00',
+                },
+                # 3 Botaderos oficiales
+                {
+                    'name': 'Botadero Municipal San Juan',
+                    'description': 'Punto de acopio municipal oficial en el Sector San Juan. Autorizado para depositar bolsas de basura domésticas.',
+                    'latitude': -10.6750,
+                    'longitude': -76.2520,
+                    'type': 'municipalDump',
+                    'fill_level': 'medium',
+                    'schedule': 'Recolección diaria por camión municipal compactador a las 20:00',
+                },
+                {
+                    'name': 'Botadero Oficial Yanacancha Alta',
+                    'description': 'Botadero autorizado y supervisado por la Municipalidad Distrital de Yanacancha. Depósito seguro de bolsas de basura.',
+                    'latitude': -10.6580,
+                    'longitude': -76.2480,
+                    'type': 'municipalDump',
+                    'fill_level': 'low',
+                    'schedule': 'Lunes, Miércoles y Viernes a las 22:00',
+                },
+                {
+                    'name': 'Punto de Desecho Simón Bolívar (La Esperanza)',
+                    'description': 'Punto limpio oficial municipal. Contenedor de gran capacidad para almacenamiento temporal de bolsas de basura.',
+                    'latitude': -10.6690,
+                    'longitude': -76.2710,
+                    'type': 'municipalDump',
+                    'fill_level': 'full',
+                    'schedule': 'Diario a las 06:00',
+                },
+            ]
+
+            for data_dump in dumps_data:
+                MunicipalDump.objects.create(**data_dump)
+            self.stdout.write(self.style.SUCCESS(f'Puntos de residuo poblados: {len(dumps_data)} creados.'))
+
+            # Sembrar los puntos de la ruta del recolector (únicamente los 5 contenedores normales)
+            route_points = [
+                {'latitude': -10.6625, 'longitude': -76.2555, 'order': 1}, # Plaza Yanacancha
+                {'latitude': -10.6640, 'longitude': -76.2530, 'order': 2}, # Av. Los Próceres
+                {'latitude': -10.6685, 'longitude': -76.2580, 'order': 3}, # Hospital Huariaca
+                {'latitude': -10.6705, 'longitude': -76.2600, 'order': 4}, # Av. Bolívar Central
+                {'latitude': -10.6720, 'longitude': -76.2625, 'order': 5}, # Plaza Quiulacocha
+            ]
+
+            for rp in route_points:
+                CollectorRoutePoint.objects.create(**rp)
+            self.stdout.write(self.style.SUCCESS(f'Puntos de ruta de recolector poblados: {len(route_points)} creados.'))
+
         self.stdout.write(self.style.SUCCESS(f'Base de datos poblada con éxito con {len(alerts_data)} alertas.'))
+

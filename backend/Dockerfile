@@ -24,5 +24,5 @@ COPY . /app/
 # Exponer puerto
 EXPOSE 8000
 
-# Comando de inicio: Migrar, cargar semillas y levantar con Gunicorn
-CMD ["sh", "-c", "python manage.py migrate && python manage.py seed_data && gunicorn ecoalerta_backend.wsgi:application --bind 0.0.0.0:8000"]
+# Comando de inicio: Colectar estáticos, migrar, cargar semillas y levantar con Gunicorn
+CMD ["sh", "-c", "python manage.py collectstatic --noinput && python manage.py migrate && python manage.py seed_data && gunicorn ecoalerta_backend.wsgi:application --bind 0.0.0.0:8000"]

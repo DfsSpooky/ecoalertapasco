@@ -2,27 +2,31 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:latlong2/latlong.dart';
 import '../models/eco_alert.dart';
+import '../models/waste_point.dart';
 import 'eco_alert_service.dart';
 
 class DjangoAlertService implements EcoAlertService {
-  String get baseUrl {
+  String get baseApiUrl {
     const String envUrl = String.fromEnvironment('BACKEND_URL');
     if (envUrl.isNotEmpty) {
       final formattedUrl = envUrl.endsWith('/') ? envUrl : '$envUrl/';
-      return '${formattedUrl}api/alerts/';
+      return '${formattedUrl}api/';
     }
     if (kIsWeb) {
       final host = Uri.base.host;
       if (host.isNotEmpty && host != 'localhost' && host != '127.0.0.1') {
         if (host.contains('ngrok')) {
-          return 'http://192.168.1.95:8000/api/alerts/';
+          return 'http://192.168.1.95:8000/api/';
         }
-        return 'http://$host:8000/api/alerts/';
+        return 'http://$host:8000/api/';
       }
     }
-    return 'http://localhost:8000/api/alerts/';
+    return 'http://localhost:8000/api/';
   }
+
+  String get baseUrl => '${baseApiUrl}alerts/';
   final _controller = StreamController<List<EcoAlert>>.broadcast();
   Timer? _pollTimer;
   List<EcoAlert> _cachedAlerts = [];
@@ -202,5 +206,38 @@ class DjangoAlertService implements EcoAlertService {
   void dispose() {
     _pollTimer?.cancel();
     _controller.close();
+  }
+
+  @override
+  Future<List<WastePoint>> fetchWastePoints() async {
+    try {
+      final response = await http.get(Uri.parse('${baseApiUrl}municipal-dumps/'));
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+        return data.map((item) => WastePoint.fromJson(item)).toList();
+      }
+    } catch (e) {
+      // fallback silencioso
+    }
+    return [];
+  }
+
+  @override
+  Future<List<LatLng>> fetchCollectorRoute() async {
+    try {
+      final response = await http.get(Uri.parse('${baseApiUrl}collector-route/'));
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+        return data.map((item) {
+          return LatLng(
+            (item['latitude'] as num).toDouble(),
+            (item['longitude'] as num).toDouble(),
+          );
+        }).toList();
+      }
+    } catch (e) {
+      // fallback silencioso
+    }
+    return [];
   }
 }
