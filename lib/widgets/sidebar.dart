@@ -38,20 +38,49 @@ class LeftSidebar extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        Text(
-                          '🌱',
-                          style: GoogleFonts.outfit(fontSize: 28),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'EcoAlerta',
-                          style: GoogleFonts.outfit(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: const Color(0xFF0F172A), // Slate 900
-                            letterSpacing: 0.5,
+                        if (appState.logoUrl != null && appState.logoUrl!.isNotEmpty)
+                          Image.network(
+                            appState.logoUrl!,
+                            height: 32,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) => Row(
+                              children: [
+                                Text(
+                                  '🌱',
+                                  style: GoogleFonts.outfit(fontSize: 28),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'EcoAlerta',
+                                  style: GoogleFonts.outfit(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                    color: const Color(0xFF0F172A),
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        else
+                          Row(
+                            children: [
+                              Text(
+                                '🌱',
+                                style: GoogleFonts.outfit(fontSize: 28),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'EcoAlerta',
+                                style: GoogleFonts.outfit(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: const Color(0xFF0F172A),
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
                       ],
                     ),
                     IconButton(

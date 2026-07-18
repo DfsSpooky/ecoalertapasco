@@ -100,3 +100,20 @@ class MunicipalDump(models.Model):
     def __str__(self):
         return self.name
 
+
+class SiteConfiguration(models.Model):
+    logo = models.ImageField(upload_to='site/', blank=True, null=True, verbose_name="Logotipo de la App")
+    icon = models.ImageField(upload_to='site/', blank=True, null=True, verbose_name="Icono / Favicon")
+    is_maintenance_mode = models.BooleanField(default=False, verbose_name="Modo Mantenimiento Activo")
+    maintenance_message = models.TextField(
+        default="El sistema se encuentra en mantenimiento temporal por incidentes. Disculpe las molestias.",
+        verbose_name="Mensaje de Mantenimiento"
+    )
+
+    class Meta:
+        verbose_name = "Configuración del Sistema"
+        verbose_name_plural = "Configuración del Sistema"
+
+    def __str__(self):
+        return "Configuración Global del Sistema"
+

@@ -33,6 +33,7 @@ services:
       - DB_USER=${DB_USER:-ecoalerta_user}
       - DB_PASSWORD=${DB_PASSWORD:-ecoalerta_secure_pwd}
       - DB_PORT=${DB_PORT:-5432}
+      - DJANGO_ADMIN_PATH=${DJANGO_ADMIN_PATH:-ecoalerta-secret-admin-portal}
     depends_on:
       - db
     restart: always

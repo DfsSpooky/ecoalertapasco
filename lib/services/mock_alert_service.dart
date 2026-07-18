@@ -361,4 +361,15 @@ class MockAlertService implements EcoAlertService {
       LatLng(-10.6720, -76.2625), // Plaza Quiulacocha
     ];
   }
+
+  @override
+  Future<Map<String, dynamic>> fetchSiteSettings() async {
+    return {
+      'id': 1,
+      'logo': null,
+      'icon': null,
+      'is_maintenance_mode': false,
+      'maintenance_message': 'El sistema se encuentra en mantenimiento temporal por incidentes. Disculpe las molestias.',
+    };
+  }
 }

@@ -21,8 +21,16 @@ from django.conf import settings
 from django.conf.urls.static import static
 from alerts.views import LoginView, RegisterView, ImageUploadView
 
+import os
+
+ADMIN_PATH = os.environ.get('DJANGO_ADMIN_PATH', 'ecoalerta-secret-admin-portal').strip('/')
+if ADMIN_PATH:
+    ADMIN_PATH = f"{ADMIN_PATH}/"
+else:
+    ADMIN_PATH = "admin/"
+
 urlpatterns = [
-    path("admin/", admin.site.urls),
+    path(ADMIN_PATH, admin.site.urls),
     path("api/auth/login/", LoginView.as_view(), name="token_login"),
     path("api/auth/register/", RegisterView.as_view(), name="token_register"),
     path("api/upload/", ImageUploadView.as_view(), name="image_upload"),

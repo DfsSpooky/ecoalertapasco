@@ -8,6 +8,7 @@ import 'widgets/sidebar.dart';
 import 'widgets/map_view.dart';
 import 'widgets/authority_dashboard.dart';
 import 'widgets/transparency_portal.dart';
+import 'widgets/maintenance_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -90,6 +91,10 @@ class EcoAlertaDashboard extends StatelessWidget {
           ),
         ),
       );
+    }
+
+    if (appState.isMaintenanceMode && !appState.isSuperuser) {
+      return MaintenanceScreen(message: appState.maintenanceMessage);
     }
 
     final screenWidth = MediaQuery.of(context).size.width;

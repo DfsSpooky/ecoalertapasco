@@ -11,4 +11,5 @@ abstract class EcoAlertService {
   void setToken(String? token);
   Future<List<WastePoint>> fetchWastePoints();
   Future<List<LatLng>> fetchCollectorRoute();
+  Future<Map<String, dynamic>> fetchSiteSettings();
 }

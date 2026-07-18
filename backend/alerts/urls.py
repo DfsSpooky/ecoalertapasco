@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import AlertViewSet, alerts_sse_stream, CollectorRoutePointViewSet, MunicipalDumpViewSet
+from .views import AlertViewSet, alerts_sse_stream, CollectorRoutePointViewSet, MunicipalDumpViewSet, get_site_settings
 
 router = DefaultRouter()
 router.register(r'alerts', AlertViewSet, basename='alert')
@@ -9,5 +9,6 @@ router.register(r'municipal-dumps', MunicipalDumpViewSet, basename='municipal-du
 
 urlpatterns = [
     path('alerts/sse/', alerts_sse_stream, name='alerts-sse'),
+    path('site-settings/', get_site_settings, name='site-settings'),
     path('', include(router.urls)),
 ]

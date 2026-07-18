@@ -234,7 +234,8 @@ class LoginView(APIView):
             return Response({
                 'token': token.key,
                 'username': user.username,
-                'is_staff': user.is_staff
+                'is_staff': user.is_staff,
+                'is_superuser': user.is_superuser
             })
         return Response({'error': 'Credenciales inválidas'}, status=status.HTTP_401_UNAUTHORIZED)
 
@@ -263,7 +264,8 @@ class RegisterView(APIView):
             return Response({
                 'token': token.key,
                 'username': user.username,
-                'is_staff': user.is_staff
+                'is_staff': user.is_staff,
+                'is_superuser': user.is_superuser
             }, status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -333,4 +335,15 @@ class MunicipalDumpViewSet(viewsets.ModelViewSet):
     queryset = MunicipalDump.objects.all()
     serializer_class = MunicipalDumpSerializer
     permission_classes = [permissions.AllowAny]
+
+
+from rest_framework.decorators import api_view
+from .models import SiteConfiguration
+from .serializers import SiteConfigurationSerializer
+
+@api_view(['GET'])
+def get_site_settings(request):
+    config, created = SiteConfiguration.objects.get_or_create(id=1)
+    serializer = SiteConfigurationSerializer(config, context={'request': request})
+    return Response(serializer.data)
 

@@ -36,6 +36,9 @@ else:
 # Application definition
 
 INSTALLED_APPS = [
+    "unfold",
+    "unfold.contrib.filters",
+    "unfold.contrib.forms",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -65,7 +68,7 @@ ROOT_URLCONF = "ecoalerta_backend.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -244,3 +247,12 @@ elif not DEBUG:
     frontend_url = os.environ.get("FRONTEND_URL")
     if frontend_url:
         CSRF_TRUSTED_ORIGINS = [frontend_url]
+
+UNFOLD = {
+    "SITE_TITLE": "EcoAlerta Pasco",
+    "SITE_HEADER": "EcoAlerta Pasco Admin",
+    "SITE_SYMBOL": "eco",
+    "SHOW_HISTORY": True,
+    "SHOW_SIDEBAR_FILTER": True,
+    "DASHBOARD_CALLBACK": "alerts.dashboard.dashboard_callback",
+}

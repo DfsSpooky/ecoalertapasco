@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/eco_alert.dart';
 import '../models/waste_point.dart';
 import '../services/eco_alert_service.dart';
+import '../utils/web_utils.dart';
 
 class AppState extends ChangeNotifier {
   final EcoAlertService _alertService;
@@ -16,6 +17,8 @@ class AppState extends ChangeNotifier {
 
   List<EcoAlert> _allAlerts = [];
   bool _isLoading = true;
+  bool _isSettingsLoaded = false;
+  bool _isAlertsLoaded = false;
 
   // Filtros activos (inicializados con todos seleccionados)
   final Set<EcoCategory> _selectedCategories = Set.from(EcoCategory.values);
@@ -43,6 +46,21 @@ class AppState extends ChangeNotifier {
   EcoAlert? _activeEmergencyAlert;
 
   LatLng? _userLocation;
+
+  // Configuración del sitio y mantenimiento
+  bool _isMaintenanceMode = false;
+  String _maintenanceMessage = '';
+  String? _logoUrl;
+  String? _iconUrl;
+
+  bool get isMaintenanceMode => _isMaintenanceMode;
+  String get maintenanceMessage => _maintenanceMessage;
+  String? get logoUrl => _logoUrl;
+  String? get iconUrl => _iconUrl;
+  bool _isSuperuser = false;
+  bool get isSuperuser => _isSuperuser;
+  String _adminUrl = 'http://localhost:8000/admin/';
+  String get adminUrl => _adminUrl;
   bool _isProximityFilterActive = false;
   double _proximityRadius = 1000.0; // en metros
 
@@ -190,15 +208,73 @@ class AppState extends ChangeNotifier {
 
   void _init() {
     _isLoading = true;
+    _isSettingsLoaded = false;
+    _isAlertsLoaded = false;
     notifyListeners();
 
     _subscription = _alertService.watchAlerts().listen((alerts) {
       _allAlerts = alerts.toList(); // Hacer una copia editable
-      _isLoading = false;
-      notifyListeners();
+      _isAlertsLoaded = true;
+      _checkLoadingFinished();
     });
 
     loadWasteData();
+    loadSiteSettings();
+  }
+
+  void _checkLoadingFinished() {
+    if (_isAlertsLoaded && _isSettingsLoaded) {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadSiteSettings() async {
+    try {
+      final settings = await _alertService.fetchSiteSettings();
+      if (settings.isNotEmpty) {
+        _isMaintenanceMode = settings['is_maintenance_mode'] ?? false;
+        _maintenanceMessage = settings['maintenance_message'] ?? '';
+        _logoUrl = settings['logo'];
+        _iconUrl = settings['icon'];
+        
+        _adminUrl = settings['admin_url'] ?? 'http://localhost:8000/admin/';
+        if (!_adminUrl.startsWith('http')) {
+          const String envUrl = String.fromEnvironment('BACKEND_URL');
+          final String host = envUrl.isNotEmpty ? envUrl : 'http://localhost:8000';
+          final cleanedHost = host.endsWith('/') ? host.substring(0, host.length - 1) : host;
+          final cleanedUrl = _adminUrl.startsWith('/') ? _adminUrl : '/$_adminUrl';
+          _adminUrl = '$cleanedHost$cleanedUrl';
+        }
+        
+        // Formatear logo si es ruta relativa
+        if (_logoUrl != null && _logoUrl!.isNotEmpty && !_logoUrl!.startsWith('http')) {
+          const String envUrl = String.fromEnvironment('BACKEND_URL');
+          final String host = envUrl.isNotEmpty ? envUrl : 'http://localhost:8000';
+          final cleanedHost = host.endsWith('/') ? host.substring(0, host.length - 1) : host;
+          final cleanedUrl = _logoUrl!.startsWith('/') ? _logoUrl! : '/$_logoUrl';
+          _logoUrl = '$cleanedHost$cleanedUrl';
+        }
+
+        // Formatear y actualizar favicon si es ruta relativa
+        if (_iconUrl != null && _iconUrl!.isNotEmpty) {
+          String fullIconUrl = _iconUrl!;
+          if (!fullIconUrl.startsWith('http')) {
+            const String envUrl = String.fromEnvironment('BACKEND_URL');
+            final String host = envUrl.isNotEmpty ? envUrl : 'http://localhost:8000';
+            final cleanedHost = host.endsWith('/') ? host.substring(0, host.length - 1) : host;
+            final cleanedUrl = fullIconUrl.startsWith('/') ? fullIconUrl : '/$fullIconUrl';
+            fullIconUrl = '$cleanedHost$cleanedUrl';
+          }
+          changeFavicon(fullIconUrl);
+        }
+      }
+    } catch (e) {
+      // fallback silencioso
+    } finally {
+      _isSettingsLoaded = true;
+      _checkLoadingFinished();
+    }
   }
 
   Future<void> loadWasteData() async {
@@ -746,11 +822,13 @@ class AppState extends ChangeNotifier {
         final data = json.decode(response.body);
         final token = data['token'] as String?;
         final isStaff = data['is_staff'] as bool? ?? false;
+        final isSuperuser = data['is_superuser'] as bool? ?? false;
         final name = data['username'] as String?;
 
         if (token != null) {
           _authToken = token;
           _isLoggedInAuthority = isStaff;
+          _isSuperuser = isSuperuser;
           _loggedUsername = name;
           _alertService.setToken(token);
           notifyListeners();
@@ -779,11 +857,13 @@ class AppState extends ChangeNotifier {
         final data = json.decode(response.body);
         final token = data['token'] as String?;
         final isStaff = data['is_staff'] as bool? ?? false;
+        final isSuperuser = data['is_superuser'] as bool? ?? false;
         final name = data['username'] as String?;
 
         if (token != null) {
           _authToken = token;
           _isLoggedInAuthority = isStaff;
+          _isSuperuser = isSuperuser;
           _loggedUsername = name;
           _alertService.setToken(token);
           notifyListeners();
@@ -799,6 +879,7 @@ class AppState extends ChangeNotifier {
   void logout() {
     _authToken = null;
     _isLoggedInAuthority = false;
+    _isSuperuser = false;
     _loggedUsername = null;
     _showAuthorityDashboard = false;
     _showDismissed = false;

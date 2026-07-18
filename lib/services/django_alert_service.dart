@@ -240,4 +240,17 @@ class DjangoAlertService implements EcoAlertService {
     }
     return [];
   }
+
+  @override
+  Future<Map<String, dynamic>> fetchSiteSettings() async {
+    try {
+      final response = await http.get(Uri.parse('${baseApiUrl}site-settings/'));
+      if (response.statusCode == 200) {
+        return json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      // fallback silencioso
+    }
+    return {};
+  }
 }

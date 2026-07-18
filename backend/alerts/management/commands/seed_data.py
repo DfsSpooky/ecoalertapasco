@@ -36,6 +36,10 @@ class Command(BaseCommand):
                 )
                 self.stdout.write(self.style.SUCCESS(f"Usuario de autoridad '{auth['username']}' creado (Pass: EcoalertaSecure123!)."))
 
+        # Inicializar configuración del sitio por defecto si no existe
+        from alerts.models import SiteConfiguration
+        SiteConfiguration.objects.get_or_create(id=1)
+
         # Verificar si ya existen alertas
         if Alert.objects.exists() and not force:
             self.stdout.write(self.style.WARNING('La base de datos ya contiene alertas. Omitiendo población de semillas para proteger datos reales.'))
@@ -301,4 +305,3 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f'Puntos de ruta de recolector poblados: {len(route_points)} creados.'))
 
         self.stdout.write(self.style.SUCCESS(f'Base de datos poblada con éxito con {len(alerts_data)} alertas.'))
-
