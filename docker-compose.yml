@@ -24,13 +24,15 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DEBUG=True
-      - SECRET_KEY=django-insecure-development-secret-key-12345
-      - DB_HOST=db
-      - DB_NAME=ecoalerta
-      - DB_USER=ecoalerta_user
-      - DB_PASSWORD=ecoalerta_secure_pwd
-      - DB_PORT=5432
+      - DEBUG=${DEBUG:-True}
+      - SECRET_KEY=${SECRET_KEY:-django-insecure-development-secret-key-12345}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8080}
+      - DB_HOST=${DB_HOST:-db}
+      - DB_NAME=${DB_NAME:-ecoalerta}
+      - DB_USER=${DB_USER:-ecoalerta_user}
+      - DB_PASSWORD=${DB_PASSWORD:-ecoalerta_secure_pwd}
+      - DB_PORT=${DB_PORT:-5432}
     depends_on:
       - db
     restart: always
@@ -40,7 +42,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        - BACKEND_URL=http://localhost:8000
+        - BACKEND_URL=${BACKEND_URL:-http://localhost:8000}
     container_name: ecoalerta_frontend
     ports:
       - "8080:80"

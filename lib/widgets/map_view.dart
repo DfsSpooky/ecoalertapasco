@@ -29,6 +29,7 @@ class _EcoMapViewState extends State<EcoMapView> {
   bool _isListExpanded = true;
   bool _showWasteLayer = false;
   bool _showDistrictBoundaries = false;
+  bool _showHeatmap = false;
 
   @override
   void dispose() {
@@ -383,6 +384,38 @@ class _EcoMapViewState extends State<EcoMapView> {
       );
     }).toList();
 
+    final List<CircleMarker> heatmapCircles = [];
+    if (_showHeatmap) {
+      for (final alert in alerts) {
+        double radius;
+        Color color;
+        switch (alert.severity) {
+          case EcoSeverity.critico:
+            radius = 200.0;
+            color = const Color(0xFFEF4444).withOpacity(0.24); // Red
+            break;
+          case EcoSeverity.medio:
+            radius = 140.0;
+            color = const Color(0xFFF59E0B).withOpacity(0.20); // Orange
+            break;
+          case EcoSeverity.bajo:
+            radius = 90.0;
+            color = const Color(0xFF10B981).withOpacity(0.15); // Emerald/Green
+            break;
+        }
+        
+        heatmapCircles.add(
+          CircleMarker(
+            point: LatLng(alert.latitude, alert.longitude),
+            radius: radius,
+            useRadiusInMeter: true,
+            color: color,
+            borderStrokeWidth: 0,
+          ),
+        );
+      }
+    }
+
     // Agregar marcador de la ubicación actual del usuario (Punto Azul GPS)
     if (appState.userLocation != null) {
       markers.add(
@@ -607,7 +640,10 @@ class _EcoMapViewState extends State<EcoMapView> {
                       ],
                     ),
 
-                  MarkerLayer(markers: markers),
+                  if (!_showHeatmap)
+                    MarkerLayer(markers: markers)
+                  else
+                    CircleLayer(circles: heatmapCircles),
                 ],
               ),
       
@@ -1007,6 +1043,49 @@ class _EcoMapViewState extends State<EcoMapView> {
                           onPressed: () {
                             setState(() {
                               _showDistrictBoundaries = !_showDistrictBoundaries;
+                            });
+                          },
+                        ),
+                      ),
+
+                      // Botón de alternar Mapa de Calor
+                      Container(
+                        margin: const EdgeInsets.only(right: 8),
+                        decoration: BoxDecoration(
+                          color: _showHeatmap ? const Color(0xFFFEE2E2) : Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _showHeatmap ? const Color(0xFFEF4444) : const Color(0xFFE2E8F0),
+                            width: 1.5,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.08),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            )
+                          ],
+                        ),
+                        child: TextButton.icon(
+                          icon: Icon(
+                            Icons.local_fire_department_rounded,
+                            color: _showHeatmap ? const Color(0xFFEF4444) : const Color(0xFF64748B),
+                            size: 16,
+                          ),
+                          label: Text(
+                            '🔥 Mapa de Calor',
+                            style: GoogleFonts.outfit(
+                              color: _showHeatmap ? const Color(0xFF991B1B) : const Color(0xFF475569),
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              _showHeatmap = !_showHeatmap;
                             });
                           },
                         ),

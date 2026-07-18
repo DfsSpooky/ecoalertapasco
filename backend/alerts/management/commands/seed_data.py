@@ -6,7 +6,42 @@ import datetime
 class Command(BaseCommand):
     help = 'Poblar la base de datos con datos de prueba reales para Cerro de Pasco'
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--force',
+            action='store_true',
+            help='Forzar el vaciado y la reinserción de datos de prueba',
+        )
+
     def handle(self, *args, **options):
+        force = options.get('force', False)
+        
+        # Crear usuarios de autoridad por defecto (siempre se valida)
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        
+        authorities = [
+            {'username': 'autoridad_pasco', 'email': 'pasco@ecoalerta.gov.pe', 'is_staff': True},
+            {'username': 'autoridad_yanacancha', 'email': 'yanacancha@ecoalerta.gov.pe', 'is_staff': True},
+            {'username': 'autoridad_bolivar', 'email': 'bolivar@ecoalerta.gov.pe', 'is_staff': True},
+        ]
+        
+        for auth in authorities:
+            if not User.objects.filter(username=auth['username']).exists():
+                User.objects.create_user(
+                    username=auth['username'],
+                    email=auth['email'],
+                    password='EcoalertaSecure123!',
+                    is_staff=auth['is_staff']
+                )
+                self.stdout.write(self.style.SUCCESS(f"Usuario de autoridad '{auth['username']}' creado (Pass: EcoalertaSecure123!)."))
+
+        # Verificar si ya existen alertas
+        if Alert.objects.exists() and not force:
+            self.stdout.write(self.style.WARNING('La base de datos ya contiene alertas. Omitiendo población de semillas para proteger datos reales.'))
+            self.stdout.write('Use --force si desea limpiar y repoblar la base de datos de alertas.')
+            return
+
         # Limpiar base de datos
         self.stdout.write('Limpiando base de datos de alertas...')
         Alert.objects.all().delete()

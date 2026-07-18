@@ -17,6 +17,7 @@ RUN flutter build web --release --dart-define=BACKEND_URL=${BACKEND_URL}
 
 # Stage 2: Servir los archivos estáticos usando Nginx
 FROM nginx:alpine
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/build/web /usr/share/nginx/html
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

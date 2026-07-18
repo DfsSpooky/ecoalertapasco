@@ -710,6 +710,10 @@ class AppState extends ChangeNotifier {
         Uri.parse('$apiBaseUrl/api/upload/'),
       );
       
+      if (_authToken != null) {
+        request.headers['Authorization'] = 'Token $_authToken';
+      }
+      
       request.files.add(
         http.MultipartFile.fromBytes(
           'image',

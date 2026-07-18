@@ -38,7 +38,7 @@ Coolify provee bases de datos integradas "one-click" que se configuran muy fáci
 
 ## 🐍 Paso 2: Desplegar el Backend (Django)
 
-El backend de Django se compilará y ejecutará usando el [Dockerfile](file:///Users/miguel/Documents/Proyectos/EcoAlerta/backend/Dockerfile) que se encuentra en la carpeta `/backend`.
+El backend de Django se compilará y ejecutará usando el [Dockerfile](file:///Users/miguel/Documents/GitHub/ecoalertapasco/backend/Dockerfile) que se encuentra en la carpeta `/backend`.
 
 1. En Coolify, haz clic en **+ New** -> **Application** -> **Public Repository** (o Private Repository si es privado).
 2. Pega la URL de tu repositorio Git y la rama correspondiente.
@@ -47,21 +47,29 @@ El backend de Django se compilará y ejecutará usando el [Dockerfile](file:///U
    - **Docker Build Path (Build Source)**: Cámbialo a `/backend` (esto es crucial para que use el Dockerfile del backend).
    - **Ports Excluded/Exposed**: Indica el puerto `8000`.
 4. Asigna un dominio para la API en el campo **Domains** (ej. `https://api.ecoalerta.tudominio.com`). Coolify gestionará el certificado SSL automáticamente.
-5. Ve a la pestaña **Environment Variables** (Variables de Entorno) y añade lo siguiente:
+5. **Configurar Almacenamiento Persistente (Volumen para Media):**
+   - Ve a la pestaña **Storage** (Almacenamiento) en la aplicación de Django.
+   - Crea un nuevo volumen persistente con los siguientes datos:
+     - **Name**: `ecoalerta-media`
+     - **Destination Path**: `/app/media`
+   - Esto es crucial para que las imágenes que suban los ciudadanos y las evidencias de las autoridades persistan entre redespliegues del contenedor.
+6. Ve a la pestaña **Environment Variables** (Variables de Entorno) y añade lo siguiente:
    - `DEBUG`: `False`
    - `SECRET_KEY`: *(Genera una cadena aleatoria y segura para producción)*
+   - `ALLOWED_HOSTS`: `api.ecoalerta.tudominio.com` *(El dominio de tu API, sin https://)*
+   - `FRONTEND_URL`: `https://ecoalerta.tudominio.com` *(El dominio de tu frontend web)*
    - `DB_HOST`: *(El host interno de la base de datos de Coolify)*
    - `DB_NAME`: `ecoalerta`
    - `DB_USER`: `ecoalerta_user`
    - `DB_PASSWORD`: *(La contraseña que definiste en el Paso 1)*
    - `DB_PORT`: `5432`
-6. Haz clic en **Deploy**. El Dockerfile se encargará automáticamente de ejecutar las migraciones (`migrate`) y cargar los datos semilla (`seed_data`) antes de iniciar con `Gunicorn`.
+7. Haz clic en **Deploy**. El Dockerfile se encargará automáticamente de ejecutar las migraciones (`migrate`) y cargar los datos semilla (`seed_data`) antes de iniciar con `Gunicorn`.
 
 ---
 
 ## ⚡ Paso 3: Desplegar el Frontend (Flutter Web)
 
-El frontend de Flutter Web se compilará en Coolify usando el [Dockerfile](file:///Users/miguel/Documents/Proyectos/EcoAlerta/Dockerfile) de la raíz del proyecto y se servirá mediante **Nginx**.
+El frontend de Flutter Web se compilará en Coolify usando el [Dockerfile](file:///Users/miguel/Documents/GitHub/ecoalertapasco/Dockerfile) de la raíz del proyecto y se servirá mediante **Nginx**.
 
 1. En Coolify, haz clic en **+ New** -> **Application** -> Selecciona el mismo repositorio Git.
 2. Configura los ajustes de construcción:
@@ -93,7 +101,7 @@ Una vez completado el despliegue de los 3 recursos, valida lo siguiente:
 
 ### ❌ Error: "CORS (Cross-Origin Resource Sharing)"
 * **Causa**: Las peticiones del dominio del frontend son rechazadas por el backend de Django.
-* **Solución**: El backend en [settings.py](file:///Users/miguel/Documents/Proyectos/EcoAlerta/backend/ecoalerta_backend/settings.py) ya tiene configurado `CORS_ALLOW_ALL_ORIGINS = True`. Si prefieres restringirlo por seguridad en producción, puedes instalar `django-cors-headers` y listar explícitamente tu dominio en `CORS_ALLOWED_ORIGINS` dentro de `settings.py`.
+* **Solución**: El backend en [settings.py](file:///Users/miguel/Documents/GitHub/ecoalertapasco/backend/ecoalerta_backend/settings.py) está blindado por seguridad en producción. Para permitir el acceso, debes asegurarte de haber agregado la variable de entorno `FRONTEND_URL` en la configuración del backend en Coolify con el dominio exacto de tu aplicación (ej: `https://ecoalerta.tudominio.com`), la cual se añade dinámicamente a los orígenes CORS permitidos.
 
 ### ❌ Las migraciones no se ejecutan o fallan al iniciar el Backend
 * **Causa**: El backend intentó arrancar antes de que la base de datos PostgreSQL estuviera lista para recibir conexiones.

@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -20,12 +21,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-*kj6-%7()htg3xv%(x^6-^3qavvc4%=so3wl@)4niaa)@h)2x0"
+SECRET_KEY = os.environ.get("SECRET_KEY", "django-insecure-*kj6-%7()htg3xv%(x^6-^3qavvc4%=so3wl@)4niaa)@h)2x0")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get("DEBUG", "True").lower() in ("true", "1", "yes")
 
-ALLOWED_HOSTS = ['*']
+allowed_hosts_env = os.environ.get("ALLOWED_HOSTS")
+if allowed_hosts_env:
+    ALLOWED_HOSTS = allowed_hosts_env.split(",")
+else:
+    ALLOWED_HOSTS = ["*"] if DEBUG else []
 
 
 # Application definition
@@ -74,8 +79,6 @@ TEMPLATES = [
 WSGI_APPLICATION = "ecoalerta_backend.wsgi.application"
 
 
-import os
-
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
@@ -95,6 +98,7 @@ if db_url and (db_url.startswith("postgres://") or db_url.startswith("postgresql
         "PASSWORD": url.password or "",
         "HOST": url.hostname or "localhost",
         "PORT": url.port or 5432,
+        "CONN_MAX_AGE": 60,
     }
 elif os.environ.get("DB_HOST"):
     DATABASES["default"] = {
@@ -104,6 +108,7 @@ elif os.environ.get("DB_HOST"):
         "PASSWORD": os.environ.get("DB_PASSWORD", ""),
         "HOST": os.environ.get("DB_HOST", "localhost"),
         "PORT": os.environ.get("DB_PORT", "5432"),
+        "CONN_MAX_AGE": 60,
     }
 
 
@@ -146,10 +151,25 @@ STATIC_URL = "static/"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
+import sys
+TESTING = 'test' in sys.argv or 'test_coverage' in sys.argv
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.TokenAuthentication",
     ],
+    "DEFAULT_THROTTLE_CLASSES": [] if TESTING else [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {} if TESTING else {
+        "anon": "100/day",
+        "user": "1000/day",
+        "auth": "10/minute",
+        "uploads": "15/hour",
+        "alerts_create": "30/hour",
+    },
 }
 
 # Permitir todos los orígenes solo en desarrollo (DEBUG=True)
@@ -167,3 +187,58 @@ else:
     frontend_url = os.environ.get("FRONTEND_URL")
     if frontend_url:
         CORS_ALLOWED_ORIGINS.append(frontend_url)
+
+if not DEBUG:
+    # Habilitar cabecera para proxies inversos (ej. Traefik en Coolify)
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    # Evitar ataques de clickjacking
+    X_FRAME_OPTIONS = 'DENY'
+    # Evitar sniffing de tipo MIME
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    # Habilitar filtro XSS en navegadores antiguos
+    SECURE_BROWSER_XSS_FILTER = True
+    # Cookies de sesión seguras
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
+# Configuración de Logging para Producción y Desarrollo
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose' if not DEBUG else 'simple',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO' if not DEBUG else 'DEBUG',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+
+# CSRF Trusted Origins para Producción
+csrf_trusted_origins_env = os.environ.get("CSRF_TRUSTED_ORIGINS")
+if csrf_trusted_origins_env:
+    CSRF_TRUSTED_ORIGINS = csrf_trusted_origins_env.split(",")
+elif not DEBUG:
+    frontend_url = os.environ.get("FRONTEND_URL")
+    if frontend_url:
+        CSRF_TRUSTED_ORIGINS = [frontend_url]
