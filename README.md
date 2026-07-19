@@ -107,3 +107,23 @@ class SupabaseAlertService implements EcoAlertService {
 ```
 
 3. Modifica tu `main.dart` para inicializar Supabase y pasar este nuevo servicio en el `ChangeNotifierProvider`.
+
+---
+
+## 🐳 Despliegue en Producción, Local y Coolify
+
+Para desplegar la aplicación completa con **Docker Compose** (PostgreSQL, Django Backend REST API y Flutter Web Nginx):
+
+```bash
+# 1. Copiar configuración de entorno
+cp .env.example .env
+
+# 2. Levantar la pila completa en segundo plano
+docker compose up -d --build
+
+# 3. Comprobar salud del sistema
+curl http://localhost:8000/api/health/
+```
+
+- **Guía Completa de Despliegue y Manual de Administración**: Consulta la guía detallada [COOLIFY_DEPLOY_GUIDE.md](file:///Users/miguel/Documents/GitHub/ecoalertapasco/COOLIFY_DEPLOY_GUIDE.md) para aprender a desplegar en **Coolify**, realizar pruebas en **Multipass VPS (Mac Intel)**, consultar logs y realizar copias de seguridad de la base de datos.
+

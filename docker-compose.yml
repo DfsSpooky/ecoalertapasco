@@ -5,13 +5,19 @@ services:
     image: postgres:15-alpine
     container_name: ecoalerta_db
     environment:
-      POSTGRES_DB: ecoalerta
-      POSTGRES_USER: ecoalerta_user
-      POSTGRES_PASSWORD: ecoalerta_secure_pwd
+      POSTGRES_DB: ${DB_NAME:-ecoalerta}
+      POSTGRES_USER: ${DB_USER:-ecoalerta_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ecoalerta_secure_pwd}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-ecoalerta_user} -d ${DB_NAME:-ecoalerta}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     restart: always
 
   backend:
@@ -21,6 +27,7 @@ services:
     container_name: ecoalerta_backend
     volumes:
       - ./backend:/app
+      - backend_media:/app/media
     ports:
       - "8000:8000"
     environment:
@@ -34,8 +41,12 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-ecoalerta_secure_pwd}
       - DB_PORT=${DB_PORT:-5432}
       - DJANGO_ADMIN_PATH=${DJANGO_ADMIN_PATH:-ecoalerta-secret-admin-portal}
+      - DJANGO_SUPERUSER_USERNAME=${DJANGO_SUPERUSER_USERNAME:-admin}
+      - DJANGO_SUPERUSER_PASSWORD=${DJANGO_SUPERUSER_PASSWORD:-AdminPass123!}
+      - DJANGO_SUPERUSER_EMAIL=${DJANGO_SUPERUSER_EMAIL:-admin@ecoalerta.gov.pe}
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     restart: always
 
   frontend:
@@ -48,8 +59,11 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: always
 
 volumes:
   pgdata:
+  backend_media:
+

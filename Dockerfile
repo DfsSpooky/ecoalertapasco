@@ -20,4 +20,9 @@ FROM nginx:alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/build/web /usr/share/nginx/html
 EXPOSE 80
+
+# Sonda de salud para el Frontend
+HEALTHCHECK --interval=15s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://127.0.0.1:80/healthz || exit 1
+
 CMD ["nginx", "-g", "daemon off;"]

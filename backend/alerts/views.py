@@ -347,3 +347,25 @@ def get_site_settings(request):
     serializer = SiteConfigurationSerializer(config, context={'request': request})
     return Response(serializer.data)
 
+
+from django.db import connection
+
+@api_view(['GET'])
+def health_check(request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+        return Response({
+            "status": "ok",
+            "database": "connected",
+            "timestamp": timezone.now().isoformat()
+        }, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({
+            "status": "error",
+            "database": f"disconnected: {str(e)}",
+            "timestamp": timezone.now().isoformat()
+        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+

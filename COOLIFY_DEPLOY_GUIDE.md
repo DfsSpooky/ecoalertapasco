@@ -1,137 +1,249 @@
-# Guía de Despliegue de EcoAlerta en Coolify 🌱
+# Manual Maestro de Despliegue, Administrabilidad y Escalabilidad - EcoAlerta 🌱
 
-Esta guía detalla el paso a paso para desplegar la aplicación completa (**Base de Datos**, **Backend Django**, y **Frontend Flutter Web**) en tu instancia de **Coolify**.
+Este manual contiene la guía paso a paso para el despliegue local, pruebas en **Multipass VPS (Mac con procesador Intel)**, despliegue en producción mediante **Coolify**, y las mejores prácticas para la administración y escalamiento de la plataforma **EcoAlerta Pasco**.
 
 ---
 
-## 📋 Arquitectura de Despliegue Recomendada
+## 🏗️ 1. Arquitectura de la Aplicación y Escalabilidad
 
-Para producción, se recomienda configurar **tres recursos individuales** dentro del mismo proyecto y entorno en Coolify. Esto permite aislar responsabilidades, escalar independientemente el backend/frontend, y dejar que Coolify gestione automáticamente los certificados SSL (HTTPS).
+EcoAlerta está diseñada con una arquitectura desacoplada y basada en microservicios contenerizados:
 
 ```mermaid
 graph TD
-    User([Usuario]) -->|HTTPS| FE(Frontend: Flutter Web)
-    FE -->|API HTTPS| BE(Backend: Django)
-    BE -->|Conexión Interna| DB[(Base de Datos: PostgreSQL)]
+    User([Ciudadano / Autoridad]) -->|HTTPS / HTTP| FE[Frontend: Flutter Web + Nginx]
+    FE -->|API Rest & SSE| BE[Backend: Django REST + Gunicorn]
+    BE -->|Conexión SQL| DB[(Base de Datos: PostgreSQL)]
+    BE -->|Almacenamiento Persistente| VOL[(Volumen Media /app/media)]
+```
+
+### Características de Administrabilidad y Resiliencia Incorporadas:
+- **Sondas de Salud (Health Checks)**:
+  - Backend API: `GET /api/health/` (Comprueba conectividad activa con PostgreSQL).
+  - Frontend Web: `GET /healthz` (Comprueba el servidor Nginx web).
+  - PostgreSQL: `pg_isready -U ecoalerta_user -d ecoalerta`.
+- **Panel de Administración Moderno**:
+  - Django Unfold Admin accesible en la ruta configurable `DJANGO_ADMIN_PATH` (por defecto `/ecoalerta-secret-admin-portal/`).
+- **Resiliencia al Inicio (*Wait-for-DB*)**:
+  - El backend reintenta automáticamente la conexión a la base de datos hasta por 60 segundos antes de ejecutar migraciones y semillas, evitando reinicios en bucle si PostgreSQL tarda en levantar.
+- **Persistencia de Archivos**:
+  - Las imágenes cargadas por los ciudadanos se almacenan en el volumen `/app/media`, permitiendo mantener los archivos sin importar el redespliegue de contenedores.
+
+---
+
+## 💻 2. Despliegue Local con Docker Compose
+
+Si deseas levantar la pila completa en tu máquina de desarrollo local:
+
+### Requisitos:
+- Docker Desktop instalado y corriendo.
+
+### Pasos para iniciar:
+1. Clonar el repositorio e ir a la raíz del proyecto.
+2. Copiar el archivo de entorno de ejemplo:
+   ```bash
+   cp .env.example .env
+   ```
+3. Ejecutar la pila con Docker Compose:
+   ```bash
+   docker compose up -d --build
+   ```
+4. Verificar el estado de la pila y las sondas de salud:
+   ```bash
+   docker compose ps
+   ```
+5. Acceder a los servicios locales:
+   - **Frontend Web**: [http://localhost:8080](http://localhost:8080)
+   - **Backend API**: [http://localhost:8000/api/alerts/](http://localhost:8000/api/alerts/)
+   - **Sonda de Salud Backend**: [http://localhost:8000/api/health/](http://localhost:8000/api/health/)
+   - **Panel Administrador Django**: [http://localhost:8000/ecoalerta-secret-admin-portal/](http://localhost:8000/ecoalerta-secret-admin-portal/)
+     - *Usuario Superadmin por defecto*: `admin`
+     - *Contraseña Superadmin por defecto*: `AdminPass123!`
+
+---
+
+## 🖥️ 3. Configuración y Pruebas en Multipass VPS (Mac con Chip Intel)
+
+Esta sección explica cómo probar la aplicación en una Máquina Virtual Ubuntu local administrada por **Multipass** en tu Mac Intel.
+
+### Paso 3.1: Identificar la IP de la VM Multipass
+Abre la terminal en tu Mac y consulta la IP de tu instancia de Multipass:
+```bash
+multipass list
+```
+*Ejemplo de salida:*
+```text
+Name                    State           IPv4            Image
+vps-test                Running         192.168.252.3   Ubuntu 22.04 LTS
+```
+En este ejemplo, la IP de la VM es `192.168.252.3`.
+
+### Paso 3.2: Configurar Dominios Locales en tu Mac
+Para simular el entorno real con nombres de dominio en tu navegador, edita el archivo de hosts en tu Mac:
+```bash
+sudo nano /etc/hosts
+```
+Añade la siguiente línea (reemplaza `192.168.252.3` con la IP real de tu Multipass):
+```text
+192.168.252.3 ecoalerta.local api.ecoalerta.local
+```
+Guarda y sal (`Ctrl + O`, `Enter`, `Ctrl + X`).
+
+### Paso 3.3: Ejecutar en la VM Multipass (Vía Docker Compose o Coolify)
+
+#### Opción A: Despliegue con Docker Compose dentro de Multipass
+1. Accede a la VM de Multipass:
+   ```bash
+   multipass shell vps-test
+   ```
+2. Clona o copia tu repositorio en la VM.
+3. Asegúrate de configurar en el `.env`:
+   ```env
+   ALLOWED_HOSTS=api.ecoalerta.local,localhost,127.0.0.1
+   FRONTEND_URL=http://ecoalerta.local
+   BACKEND_URL=http://api.ecoalerta.local:8000
+   ```
+4. Ejecutar `docker compose up -d --build`.
+
+#### Opción B: Ejecutar Coolify dentro de la VM Multipass
+1. Instalar Coolify en la VM Multipass:
+   ```bash
+   multipass shell vps-test
+   curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
+   ```
+2. Accede al panel de Coolify desde el navegador de tu Mac ingresando a `http://192.168.252.3:8000`.
+3. Sigue el Paso 4 de esta guía para desplegar en Coolify usando los dominios `http://ecoalerta.local` y `http://api.ecoalerta.local`.
+
+---
+
+## 🚀 4. Despliegue en Producción en Coolify
+
+Coolify permite dos métodos de despliegue: **Servicios Individuales** (Recomendado) o **Docker Compose Stack**.
+
+---
+
+### Método 1: Servicios Individuales (Recomendado para Producción)
+
+Permite aislamiento de fallos, escalamiento independiente y SSL automático gestionado por Traefik.
+
+```mermaid
+flowchart LR
+    A[PostgreSQL Database] --> B[Django Backend Service]
+    B --> C[Flutter Frontend Web Service]
+```
+
+#### 1️⃣ Paso 1: Base de Datos PostgreSQL
+1. En Coolify, entra a tu Proyecto/Entorno.
+2. Clic en **+ New** -> **Database** -> **PostgreSQL**.
+3. Parámetros:
+   - **Name**: `ecoalerta-db`
+   - **Postgres Database**: `ecoalerta`
+   - **Postgres User**: `ecoalerta_user`
+   - **Postgres Password**: *(Define una clave segura)*
+4. Iniciar servicio y copiar la dirección de conexión interna (Host interno del contenedor, ej. `postgresql-12345:5432`).
+
+#### 2️⃣ Paso 2: Backend Django
+1. Clic en **+ New** -> **Application** -> **Public/Private Repository**.
+2. URL de Git y rama.
+3. Configuración de Build:
+   - **Build Pack**: `Dockerfile`
+   - **Docker Build Path**: `/backend`
+   - **Ports Exposed**: `8000`
+   - **Domains**: `https://api.ecoalerta.tudominio.com` (o `http://api.ecoalerta.local` en Multipass).
+4. **Almacenamiento Persistente (Media)**:
+   - Ir a la pestaña **Storage** -> Añadir Volumen Persistente:
+     - **Name**: `ecoalerta-media`
+     - **Destination Path**: `/app/media`
+5. **Variables de Entorno**:
+   ```env
+   DEBUG=False
+   SECRET_KEY=TU_SECRET_KEY_ALEATORIA_Y_SEGURA
+   ALLOWED_HOSTS=api.ecoalerta.tudominio.com
+   FRONTEND_URL=https://ecoalerta.tudominio.com
+   CSRF_TRUSTED_ORIGINS=https://ecoalerta.tudominio.com
+   DB_HOST=postgresql-12345
+   DB_NAME=ecoalerta
+   DB_USER=ecoalerta_user
+   DB_PASSWORD=TU_POSTGRES_PASSWORD
+   DB_PORT=5432
+   DJANGO_ADMIN_PATH=ecoalerta-secret-admin-portal
+   DJANGO_SUPERUSER_USERNAME=admin
+   DJANGO_SUPERUSER_PASSWORD=TU_SUPERUSER_PASSWORD_SEGURO
+   DJANGO_SUPERUSER_EMAIL=admin@ecoalerta.gov.pe
+   ```
+6. Clic en **Deploy**.
+
+#### 3️⃣ Paso 3: Frontend Flutter Web
+1. Clic en **+ New** -> **Application** -> Seleccionar el mismo repositorio.
+2. Configuración de Build:
+   - **Build Pack**: `Dockerfile`
+   - **Docker Build Path**: `/` (Raíz)
+   - **Ports Exposed**: `80`
+   - **Domains**: `https://ecoalerta.tudominio.com` (o `http://ecoalerta.local` en Multipass).
+3. **Build Arguments (Crucial)**:
+   - `BACKEND_URL`: `https://api.ecoalerta.tudominio.com`
+4. Clic en **Deploy**.
+
+---
+
+### Método 2: Despliegue en Lote (Docker Compose Stack en Coolify)
+
+Si prefieres desplegar todo el proyecto mediante un solo archivo `docker-compose.yml`:
+1. En Coolify, haz clic en **+ New** -> **Application** -> **Docker Compose**.
+2. Conecta tu repositorio Git o pega directamente el contenido de `docker-compose.yml`.
+3. Configura las variables de entorno en el panel de Coolify según la tabla anterior.
+4. Clic en **Deploy**.
+
+---
+
+## 🛠️ 5. Manual de Administración y Mantenimiento
+
+### 🔐 5.1 Acceso y Gestión de la Consola de Administración
+- **Ruta de acceso**: `https://api.ecoalerta.tudominio.com/ecoalerta-secret-admin-portal/`
+- **Interfaz**: Integrada con **Django Unfold**, con soporte de modo oscuro, filtros avanzados y widgets reactivos.
+- **Acciones Disponibles en el Panel**:
+  1. **Gestión de Alertas**: Modificar estados (Pendiente, En Proceso, Resuelto, Falso Reporte), editar respuestas oficiales de la autoridad y asignar distritos.
+  2. **Gestión de Rutas de Recolección y Botaderos**: Agregar o reordenar puntos en la ruta de camiones de basura y botaderos municipales.
+  3. **Configuración del Sitio**: Modificar el mensaje del banner de la ciudad, número de contacto de emergencias y estado operativo del sistema.
+  4. **Gestión de Usuarios y Permisos**: Crear cuentas para nuevas autoridades de Yanacancha, Chaupimarca o Simón Bolívar.
+
+### 📊 5.2 Monitoreo de Salud de la Infraestructura
+Puedes consultar el estado del backend mediante peticiones HTTP automatizadas a:
+```bash
+curl -i https://api.ecoalerta.tudominio.com/api/health/
+```
+*Respuesta esperada (HTTP 200 OK):*
+```json
+{
+  "status": "ok",
+  "database": "connected",
+  "timestamp": "2026-07-18T18:50:00.000000+00:00"
+}
+```
+
+### 💾 5.3 Copia de Seguridad (Backup) de Base de Datos y Medios
+
+#### Crear un Backup de PostgreSQL:
+```bash
+docker exec -t ecoalerta_db pg_dump -U ecoalerta_user ecoalerta > backup_ecoalerta_$(date +%Y%m%d).sql
+```
+
+#### Restaurar un Backup:
+```bash
+cat backup_ecoalerta_20260718.sql | docker exec -i ecoalerta_db psql -U ecoalerta_user -d ecoalerta
+```
+
+#### Respaldar la carpeta de imágenes (Media):
+```bash
+tar -czvf ecoalerta_media_backup.tar.gz ./backend/media
 ```
 
 ---
 
-## 🛠️ Paso 1: Desplegar la Base de Datos (PostgreSQL)
+## ⚡ 6. Consejos de Escalabilidad Horizontal
 
-Coolify provee bases de datos integradas "one-click" que se configuran muy fácilmente.
-
-1. En el panel de Coolify, ve al proyecto/entorno donde deseas realizar el despliegue.
-2. Haz clic en **+ New** y selecciona **Database** -> **PostgreSQL**.
-3. Configura los parámetros:
-   - **Name**: `ecoalerta-db`
-   - **Postgres Database**: `ecoalerta`
-   - **Postgres User**: `ecoalerta_user`
-   - **Postgres Password**: *(Ingresa una contraseña segura)*
-4. Guarda e inicia la base de datos.
-5. **Copia los siguientes datos de conexión** del panel de la base de datos:
-   - **Host Interno** (generalmente una dirección interna de Docker, ej. `postgresql-12345:5432`) o el nombre del servicio.
-   - **Puerto Interno** (`5432`)
-   - **Usuario**, **Contraseña** y **Nombre de la Base de Datos**.
-
----
-
-## 🐍 Paso 2: Desplegar el Backend (Django)
-
-El backend de Django se compilará y ejecutará usando el [Dockerfile](file:///Users/miguel/Documents/GitHub/ecoalertapasco/backend/Dockerfile) que se encuentra en la carpeta `/backend`.
-
-1. En Coolify, haz clic en **+ New** -> **Application** -> **Public Repository** (o Private Repository si es privado).
-2. Pega la URL de tu repositorio Git y la rama correspondiente.
-3. Configura los ajustes de construcción:
-   - **Build Pack**: Selecciona `Dockerfile`.
-   - **Docker Build Path (Build Source)**: Cámbialo a `/backend` (esto es crucial para que use el Dockerfile del backend).
-   - **Ports Excluded/Exposed**: Indica el puerto `8000`.
-4. Asigna un dominio para la API en el campo **Domains** (ej. `https://api.ecoalerta.tudominio.com`). Coolify gestionará el certificado SSL automáticamente.
-5. **Configurar Almacenamiento Persistente (Volumen para Media):**
-   - Ve a la pestaña **Storage** (Almacenamiento) en la aplicación de Django.
-   - Crea un nuevo volumen persistente con los siguientes datos:
-     - **Name**: `ecoalerta-media`
-     - **Destination Path**: `/app/media`
-   - Esto es crucial para que las imágenes que suban los ciudadanos y las evidencias de las autoridades persistan entre redespliegues del contenedor.
-6. Ve a la pestaña **Environment Variables** (Variables de Entorno) y añade lo siguiente:
-   - `DEBUG`: `False`
-   - `SECRET_KEY`: *(Genera una cadena aleatoria y segura para producción)*
-   - `ALLOWED_HOSTS`: `api.ecoalerta.tudominio.com` *(El dominio de tu API, sin https://)*
-   - `FRONTEND_URL`: `https://ecoalerta.tudominio.com` *(El dominio de tu frontend web)*
-   - `DB_HOST`: *(El host interno de la base de datos de Coolify)*
-   - `DB_NAME`: `ecoalerta`
-   - `DB_USER`: `ecoalerta_user`
-   - `DB_PASSWORD`: *(La contraseña que definiste en el Paso 1)*
-   - `DB_PORT`: `5432`
-7. Haz clic en **Deploy**. El Dockerfile se encargará automáticamente de ejecutar las migraciones (`migrate`) y cargar los datos semilla (`seed_data`) antes de iniciar con `Gunicorn`.
-
----
-
-## ⚡ Paso 3: Desplegar el Frontend (Flutter Web)
-
-El frontend de Flutter Web se compilará en Coolify usando el [Dockerfile](file:///Users/miguel/Documents/GitHub/ecoalertapasco/Dockerfile) de la raíz del proyecto y se servirá mediante **Nginx**.
-
-1. En Coolify, haz clic en **+ New** -> **Application** -> Selecciona el mismo repositorio Git.
-2. Configura los ajustes de construcción:
-   - **Build Pack**: Selecciona `Dockerfile`.
-   - **Docker Build Path**: Déjalo en `/` (raíz). Buscará el `Dockerfile` principal de la raíz.
-   - **Ports Excluded/Exposed**: Indica el puerto `80`.
-3. Asigna tu dominio principal en el campo **Domains** (ej. `https://ecoalerta.tudominio.com`).
-4. Ve a la pestaña **Build Arguments** (Argumentos de Construcción) en el panel de Coolify. **(¡IMPORTANTE!)**:
-   - Añade la variable `BACKEND_URL` apuntando al dominio público de tu API de Django que configuraste en el Paso 2.
-   - **Ejemplo**: `BACKEND_URL=https://api.ecoalerta.tudominio.com`
-5. Haz clic en **Deploy**. Coolify descargará el SDK de Flutter, compilará la versión Web inyectando el dominio del backend, y levantará el contenedor de Nginx.
-
----
-
-## 🔍 Verificación del Despliegue
-
-Una vez completado el despliegue de los 3 recursos, valida lo siguiente:
-1. Accede a `https://ecoalerta.tudominio.com`. Deberías visualizar el mapa interactivo de Cerro de Pasco y el Dashboard con Glassmorphism.
-2. Realiza un reporte de prueba en el mapa para confirmar que los datos se guarden correctamente en la base de datos PostgreSQL a través de la API del backend.
-3. Intenta iniciar sesión como autoridad para validar que las peticiones HTTP y la autenticación por token funcionen correctamente bajo HTTPS sin errores de CORS.
-
----
-
-## 💡 Consejos de Resolución de Problemas (Troubleshooting)
-
-### ❌ Error: "Mixed Content" (Petición bloqueada por el navegador)
-* **Causa**: El frontend corre bajo `https://` pero estás intentando llamar al backend usando `http://`.
-* **Solución**: Asegúrate de que configuraste `BACKEND_URL` con `https://` en los **Build Arguments** del frontend en Coolify, y que volviste a desplegar la aplicación para aplicar el cambio.
-
-### ❌ Error: "CORS (Cross-Origin Resource Sharing)"
-* **Causa**: Las peticiones del dominio del frontend son rechazadas por el backend de Django.
-* **Solución**: El backend en [settings.py](file:///Users/miguel/Documents/GitHub/ecoalertapasco/backend/ecoalerta_backend/settings.py) está blindado por seguridad en producción. Para permitir el acceso, debes asegurarte de haber agregado la variable de entorno `FRONTEND_URL` en la configuración del backend en Coolify con el dominio exacto de tu aplicación (ej: `https://ecoalerta.tudominio.com`), la cual se añade dinámicamente a los orígenes CORS permitidos.
-
-### ❌ Las migraciones no se ejecutan o fallan al iniciar el Backend
-* **Causa**: El backend intentó arrancar antes de que la base de datos PostgreSQL estuviera lista para recibir conexiones.
-* **Solución**: Puedes reiniciar el servicio del backend desde el panel de Coolify para forzar un nuevo intento de conexión y migración.
-
----
-
-## 💻 Configuración para Pruebas Locales (Multipass / VPS Local)
-
-Si estás simulando el VPS en tu Mac usando **Multipass** (con la IP `192.168.252.3`), sigue estos pasos para probar sin un dominio real:
-
-1. **Editar el archivo `/etc/hosts` en tu Mac**:
-   Abre la terminal de tu Mac y edita el archivo de hosts del sistema:
-   ```bash
-   sudo nano /etc/hosts
-   ```
-   Añade la siguiente línea al final para redireccionar los dominios locales a tu VM:
-   ```text
-   192.168.252.3 ecoalerta.local api.ecoalerta.local
-   ```
-   Guarda el archivo (`Ctrl + O`, `Enter` y luego `Ctrl + X`).
-
-2. **Configurar los dominios en Coolify**:
-   * **Backend**: En el campo **Domains**, pon `http://api.ecoalerta.local` (usa `http://` en lugar de `https://`).
-   * **Frontend**: En el campo **Domains**, pon `http://ecoalerta.local` (usa `http://` en lugar de `https://`).
-
-3. **Inyectar la URL del Backend en el Frontend**:
-   * En la pestaña **Build Arguments** del Frontend en Coolify, añade la variable:
-     `BACKEND_URL=http://api.ecoalerta.local`
-
-4. **Probar la aplicación**:
-   * Abre tu navegador en la Mac y accede a `http://ecoalerta.local` para ver el frontend.
-   * La aplicación se comunicará de forma transparente con el backend en `http://api.ecoalerta.local`.
+1. **Ajuste de Concurrencia de Gunicorn**:
+   Para procesar más peticiones simultáneas en el backend sin aumentar la memoria RAM drásticamente, ajusta el número de workers en el `Dockerfile` de Django usando la fórmula: `Workers = (2 * CPUs) + 1`.
+2. **Uso de CDN**:
+   Colocar un CDN (como Cloudflare) al frente del dominio del Frontend sirve estáticos comprimidos y reduce la latencia en más del 80%.
+3. **Réplicas de Contenedores**:
+   Tanto en Coolify como en Kubernetes, el contenedor del frontend (Nginx) y del backend (Django) se pueden duplicar horizontalmente gracias a que la sesión es apátrida (Stateless por Tokens).

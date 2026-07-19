@@ -29,13 +29,15 @@ if ADMIN_PATH:
 else:
     ADMIN_PATH = "admin/"
 
+from django.views.static import serve
+from django.urls import re_path
+
 urlpatterns = [
     path(ADMIN_PATH, admin.site.urls),
     path("api/auth/login/", LoginView.as_view(), name="token_login"),
     path("api/auth/register/", RegisterView.as_view(), name="token_register"),
     path("api/upload/", ImageUploadView.as_view(), name="image_upload"),
     path("api/", include("alerts.urls")),
+    re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
 ]
 
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

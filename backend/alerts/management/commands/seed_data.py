@@ -16,10 +16,30 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         force = options.get('force', False)
         
-        # Crear usuarios de autoridad por defecto (siempre se valida)
+        import os
         from django.contrib.auth import get_user_model
         User = get_user_model()
-        
+
+        # Crear superusuario si no existe
+        admin_username = os.environ.get('DJANGO_SUPERUSER_USERNAME', 'admin')
+        admin_email = os.environ.get('DJANGO_SUPERUSER_EMAIL', 'admin@ecoalerta.gov.pe')
+        admin_password = os.environ.get('DJANGO_SUPERUSER_PASSWORD', 'AdminPass123!')
+
+        if not User.objects.filter(is_superuser=True).exists():
+            if not User.objects.filter(username=admin_username).exists():
+                User.objects.create_superuser(
+                    username=admin_username,
+                    email=admin_email,
+                    password=admin_password
+                )
+                self.stdout.write(self.style.SUCCESS(f"Superusuario '{admin_username}' creado exitosamente (Pass: {admin_password})."))
+            else:
+                u = User.objects.get(username=admin_username)
+                u.is_superuser = True
+                u.is_staff = True
+                u.save()
+                self.stdout.write(self.style.SUCCESS(f"Usuario '{admin_username}' promovido a Superusuario."))
+
         authorities = [
             {'username': 'autoridad_pasco', 'email': 'pasco@ecoalerta.gov.pe', 'is_staff': True},
             {'username': 'autoridad_yanacancha', 'email': 'yanacancha@ecoalerta.gov.pe', 'is_staff': True},
