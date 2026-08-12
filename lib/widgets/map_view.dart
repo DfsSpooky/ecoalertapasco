@@ -3,6 +3,8 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:ui' as ui;
+import 'dart:math' as math;
+
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../models/eco_alert.dart';
@@ -36,6 +38,13 @@ class _EcoMapViewState extends State<EcoMapView> {
     _alertsScrollController.dispose();
     super.dispose();
   }
+
+  double _calculateLatLngDistance(double lat1, double lng1, double lat2, double lng2) {
+    final double dLat = lat1 - lat2;
+    final double dLng = lng1 - lng2;
+    return math.sqrt(dLat * dLat + dLng * dLng);
+  }
+
 
 
 
@@ -343,27 +352,162 @@ class _EcoMapViewState extends State<EcoMapView> {
         ? 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'
         : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
+    double zoom = 14.0;
+    try {
+      zoom = _mapController.camera.zoom;
+    } catch (_) {}
+
     // Generar marcadores (ocultar alertas normales si mostramos la capa del recolector)
-    final List<Marker> markers = _showWasteLayer
-        ? []
-        : alerts.map((alert) {
-            return Marker(
-              point: LatLng(alert.latitude, alert.longitude),
-              width: 42,
-              height: 42,
-              child: GestureDetector(
-                onTap: () {
-                  appState.selectedAlert = alert;
-                },
-                child: _MapPin(
-                  category: alert.category,
-                  severity: alert.severity,
-                  status: alert.status,
-                  isSelected: appState.selectedAlert?.id == alert.id,
+    final List<Marker> markers = [];
+    if (!_showWasteLayer) {
+      if (zoom < 15.0) {
+        final double clusterRadiusDegrees = 0.012 / math.pow(2.0, zoom - 12.0);
+        final List<List<EcoAlert>> clusters = [];
+
+        for (final alert in alerts) {
+          bool addedToCluster = false;
+          for (final cluster in clusters) {
+            final center = cluster.first;
+            final double distance = _calculateLatLngDistance(
+              center.latitude,
+              center.longitude,
+              alert.latitude,
+              alert.longitude,
+            );
+            if (distance < clusterRadiusDegrees) {
+              cluster.add(alert);
+              addedToCluster = true;
+              break;
+            }
+          }
+          if (!addedToCluster) {
+            clusters.add([alert]);
+          }
+        }
+
+        for (final cluster in clusters) {
+          if (cluster.length == 1) {
+            final alert = cluster.first;
+            markers.add(
+              Marker(
+                point: LatLng(alert.latitude, alert.longitude),
+                width: 42,
+                height: 42,
+                child: GestureDetector(
+                  onTap: () {
+                    appState.selectedAlert = alert;
+                  },
+                  child: _MapPin(
+                    category: alert.category,
+                    severity: alert.severity,
+                    status: alert.status,
+                    isSelected: appState.selectedAlert?.id == alert.id,
+                  ),
                 ),
               ),
             );
-          }).toList();
+          } else {
+            final double avgLat = cluster.map((a) => a.latitude).reduce((a, b) => a + b) / cluster.length;
+            final double avgLng = cluster.map((a) => a.longitude).reduce((a, b) => a + b) / cluster.length;
+            
+            EcoSeverity maxSeverity = EcoSeverity.bajo;
+            for (final a in cluster) {
+              if (a.severity == EcoSeverity.critico) {
+                maxSeverity = EcoSeverity.critico;
+                break;
+              } else if (a.severity == EcoSeverity.medio) {
+                maxSeverity = EcoSeverity.medio;
+              }
+            }
+
+            Color clusterColor;
+            switch (maxSeverity) {
+              case EcoSeverity.critico:
+                clusterColor = const Color(0xFFEF4444);
+                break;
+              case EcoSeverity.medio:
+                clusterColor = const Color(0xFFF59E0B);
+                break;
+              case EcoSeverity.bajo:
+                clusterColor = const Color(0xFF10B981);
+                break;
+            }
+
+            markers.add(
+              Marker(
+                point: LatLng(avgLat, avgLng),
+                width: 46,
+                height: 46,
+                child: GestureDetector(
+                  onTap: () {
+                    _mapController.move(LatLng(avgLat, avgLng), zoom + 1.8);
+                  },
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: clusterColor.withOpacity(0.25),
+                        ),
+                      ),
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: clusterColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: Text(
+                            '${cluster.length}',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }
+        }
+      } else {
+        markers.addAll(alerts.map((alert) {
+          return Marker(
+            point: LatLng(alert.latitude, alert.longitude),
+            width: 42,
+            height: 42,
+            child: GestureDetector(
+              onTap: () {
+                appState.selectedAlert = alert;
+              },
+              child: _MapPin(
+                category: alert.category,
+                severity: alert.severity,
+                status: alert.status,
+                isSelected: appState.selectedAlert?.id == alert.id,
+              ),
+            ),
+          );
+        }).toList());
+      }
+    }
+
 
     final List<CircleMarker> heatmapCircles = [];
     if (_showHeatmap && !_showWasteLayer) {

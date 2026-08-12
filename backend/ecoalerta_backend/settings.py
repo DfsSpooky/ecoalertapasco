@@ -159,9 +159,11 @@ MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 import sys
 TESTING = 'test' in sys.argv or 'test_coverage' in sys.argv
 
+from datetime import timedelta
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.TokenAuthentication",
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
     "DEFAULT_THROTTLE_CLASSES": [] if TESTING else [
         "rest_framework.throttling.AnonRateThrottle",
@@ -176,6 +178,20 @@ REST_FRAMEWORK = {
         "alerts_create": "30/hour",
     },
 }
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": False,
+    "UPDATE_LAST_LOGIN": True,
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": SECRET_KEY,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+}
+
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
 
 # Permitir todos los orígenes solo en desarrollo (DEBUG=True)
 # En producción, configurar los orígenes específicos a través de variables de entorno o dominios conocidos
