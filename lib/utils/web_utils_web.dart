@@ -1,15 +1,15 @@
-import 'dart:html' as html;
+import 'package:web/web.dart' as web;
 
 void changeFavicon(String url) {
   try {
-    final link = html.document.querySelector("link[rel*='icon']") as html.LinkElement?;
+    final link = web.document.querySelector("link[rel*='icon']") as web.HTMLLinkElement?;
     if (link != null) {
       link.href = url;
     } else {
-      final newLink = html.LinkElement()
-        ..rel = 'icon'
-        ..href = url;
-      html.document.head?.append(newLink);
+      final newLink = web.document.createElement('link') as web.HTMLLinkElement;
+      newLink.rel = 'icon';
+      newLink.href = url;
+      web.document.head?.appendChild(newLink);
     }
   } catch (e) {
     // ignore
@@ -18,7 +18,7 @@ void changeFavicon(String url) {
 
 void openUrl(String url) {
   try {
-    html.window.open(url, '_blank');
+    web.window.open(url, '_blank');
   } catch (e) {
     // ignore
   }
@@ -26,15 +26,16 @@ void openUrl(String url) {
 
 void saveLocalData(String key, String value) {
   try {
-    html.window.localStorage[key] = value;
+    web.window.localStorage.setItem(key, value);
   } catch (_) {}
 }
 
 String? getLocalData(String key) {
   try {
-    return html.window.localStorage[key];
+    return web.window.localStorage.getItem(key);
   } catch (_) {
     return null;
   }
 }
+
 

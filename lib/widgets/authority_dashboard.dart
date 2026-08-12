@@ -143,7 +143,7 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: const Color(0xFF0288D1).withOpacity(0.1),
+                color: const Color(0xFF0288D1).withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: const Icon(Icons.admin_panel_settings_rounded, color: Color(0xFF0288D1), size: 28),
@@ -1084,7 +1084,7 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
         border: Border.all(color: const Color(0xFFE2E8F0)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.01),
+            color: Colors.black.withValues(alpha: 0.01),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -1095,7 +1095,7 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
+              color: color.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(icon, color: color, size: 26),
@@ -1210,7 +1210,7 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -1253,7 +1253,7 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
@@ -1289,9 +1289,9 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.2), width: 1),
+        border: Border.all(color: color.withValues(alpha: 0.2), width: 1),
       ),
       child: Text(
         name,
@@ -1327,7 +1327,7 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -1360,9 +1360,9 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          border: Border.all(color: color.withOpacity(0.5)),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
           borderRadius: BorderRadius.circular(6),
-          color: color.withOpacity(0.04),
+          color: color.withValues(alpha: 0.04),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1663,7 +1663,7 @@ class _AuthorityDashboardViewState extends State<AuthorityDashboardView> {
                               Container(
                                 padding: const EdgeInsets.all(6),
                                 decoration: BoxDecoration(
-                                  color: color.withOpacity(0.12),
+                                  color: color.withValues(alpha: 0.12),
                                   shape: BoxShape.circle,
                                 ),
                                 child: Icon(icon, color: color, size: 14),

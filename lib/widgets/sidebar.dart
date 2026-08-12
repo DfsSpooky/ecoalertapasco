@@ -315,7 +315,7 @@ class _CategoryFilterGrid extends StatelessWidget {
             duration: const Duration(milliseconds: 200),
             decoration: BoxDecoration(
               color: isSelected 
-                  ? item.color.withOpacity(0.12) 
+                  ? item.color.withValues(alpha: 0.12) 
                   : const Color(0xFFF1F5F9), // Slate 100
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
@@ -325,7 +325,7 @@ class _CategoryFilterGrid extends StatelessWidget {
               boxShadow: isSelected
                   ? [
                       BoxShadow(
-                        color: item.color.withOpacity(0.1),
+                        color: item.color.withValues(alpha: 0.1),
                         blurRadius: 6,
                         offset: const Offset(0, 2),
                       )
@@ -414,7 +414,7 @@ class _SeverityFilterRow extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 decoration: BoxDecoration(
                   color: isSelected 
-                      ? item.color.withOpacity(0.12) 
+                      ? item.color.withValues(alpha: 0.12) 
                       : const Color(0xFFF1F5F9), // Slate 100
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
@@ -584,7 +584,7 @@ class _KpiHighlights extends StatelessWidget {
         border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.02),
+            color: Colors.black.withValues(alpha: 0.02),
             blurRadius: 4,
             offset: const Offset(0, 2),
           )
@@ -849,7 +849,7 @@ class HelpGuideDialog extends StatelessWidget {
               border: Border.all(color: const Color(0xFFE2E8F0), width: 2),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.12),
+                  color: Colors.black.withValues(alpha: 0.12),
                   blurRadius: 24,
                   offset: const Offset(0, 10),
                 )
@@ -980,9 +980,9 @@ class HelpGuideDialog extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Text(
         label,
@@ -1016,7 +1016,7 @@ class _StatusFilterRow extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 decoration: BoxDecoration(
                   color: appState.showUnresolved
-                      ? const Color(0xFFF59E0B).withOpacity(0.12)
+                      ? const Color(0xFFF59E0B).withValues(alpha: 0.12)
                       : const Color(0xFFF1F5F9),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
@@ -1054,7 +1054,7 @@ class _StatusFilterRow extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 decoration: BoxDecoration(
                   color: appState.showResolved
-                      ? const Color(0xFF10B981).withOpacity(0.12)
+                      ? const Color(0xFF10B981).withValues(alpha: 0.12)
                       : const Color(0xFFF1F5F9),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
@@ -1322,7 +1322,7 @@ class _DismissedFilterRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         decoration: BoxDecoration(
           color: appState.showDismissed
-              ? const Color(0xFF64748B).withOpacity(0.12)
+              ? const Color(0xFF64748B).withValues(alpha: 0.12)
               : const Color(0xFFF1F5F9),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
@@ -1378,7 +1378,7 @@ class _ProximityFilterSection extends StatelessWidget {
               scale: 0.8,
               child: Switch(
                 value: isActive,
-                activeColor: const Color(0xFF0288D1),
+                activeThumbColor: const Color(0xFF0288D1),
                 onChanged: (val) async {
                   if (val) {
                     final pos = await appState.getUserLatLng();
@@ -1421,7 +1421,7 @@ class _ProximityFilterSection extends StatelessWidget {
               activeTrackColor: const Color(0xFF0288D1),
               inactiveTrackColor: const Color(0xFFE2E8F0),
               thumbColor: const Color(0xFF0288D1),
-              overlayColor: const Color(0xFF0288D1).withOpacity(0.12),
+              overlayColor: const Color(0xFF0288D1).withValues(alpha: 0.12),
               trackHeight: 4,
             ),
             child: Slider(

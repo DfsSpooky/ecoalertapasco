@@ -17,7 +17,7 @@ class EcoNotification {
     // Colores y diseño premium
     Color accentColor;
     IconData icon;
-    Color bgColor = const Color(0xFF0F172A).withOpacity(0.92); // Slate 900 con transparencia
+    Color bgColor = const Color(0xFF0F172A).withValues(alpha: 0.92); // Slate 900 con transparencia
     Color textColor = Colors.white;
 
     switch (type) {
@@ -154,12 +154,12 @@ class _EcoNotificationWidgetState extends State<_EcoNotificationWidget>
               color: widget.bgColor,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: widget.accentColor.withOpacity(0.35),
+                color: widget.accentColor.withValues(alpha: 0.35),
                 width: 1.5,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.24),
+                  color: Colors.black.withValues(alpha: 0.24),
                   blurRadius: 18,
                   offset: const Offset(0, 8),
                 )
@@ -171,7 +171,7 @@ class _EcoNotificationWidgetState extends State<_EcoNotificationWidget>
                 Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
-                    color: widget.accentColor.withOpacity(0.12),
+                    color: widget.accentColor.withValues(alpha: 0.12),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
@@ -199,7 +199,7 @@ class _EcoNotificationWidgetState extends State<_EcoNotificationWidget>
                         widget.message,
                         style: GoogleFonts.outfit(
                           fontSize: 11,
-                          color: widget.textColor.withOpacity(0.85),
+                          color: widget.textColor.withValues(alpha: 0.85),
                           height: 1.3,
                         ),
                       ),
@@ -211,7 +211,7 @@ class _EcoNotificationWidgetState extends State<_EcoNotificationWidget>
                   onTap: widget.onDismiss,
                   child: Icon(
                     Icons.close_rounded,
-                    color: widget.textColor.withOpacity(0.5),
+                    color: widget.textColor.withValues(alpha: 0.5),
                     size: 16,
                   ),
                 ),

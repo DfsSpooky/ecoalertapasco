@@ -45,14 +45,14 @@ class _PulsingCriticalDotState extends State<PulsingCriticalDot>
             height: size,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFFEF4444).withOpacity(opacity * 0.12),
+              color: const Color(0xFFEF4444).withValues(alpha: opacity * 0.12),
               border: Border.all(
-                color: const Color(0xFFEF4444).withOpacity(opacity),
+                color: const Color(0xFFEF4444).withValues(alpha: opacity),
                 width: 1.5,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFEF4444).withOpacity(opacity * 0.25),
+                  color: const Color(0xFFEF4444).withValues(alpha: opacity * 0.25),
                   blurRadius: 8 * _controller.value,
                   spreadRadius: 2 * _controller.value,
                 ),
@@ -75,7 +75,7 @@ class _PulsingCriticalDotState extends State<PulsingCriticalDot>
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFEF4444).withOpacity(1.0 - pulseValue),
+                  color: const Color(0xFFEF4444).withValues(alpha: 1.0 - pulseValue),
                   blurRadius: 6 * pulseValue,
                   spreadRadius: 2 * pulseValue,
                 ),

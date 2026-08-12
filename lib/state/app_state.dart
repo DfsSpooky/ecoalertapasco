@@ -350,6 +350,7 @@ class AppState extends ChangeNotifier {
   EcoAlert? get activeEmergencyAlert => _activeEmergencyAlert;
 
   String? get authToken => _authToken;
+  String? get refreshToken => _refreshToken;
   bool get isLoggedIn => _authToken != null;
   bool get isLoggedInAuthority => _isLoggedInAuthority;
   String? get loggedUsername => _loggedUsername;
@@ -608,7 +609,7 @@ class AppState extends ChangeNotifier {
       if (permission == LocationPermission.deniedForever) return null;
 
       final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
       );
       _userLocation = LatLng(pos.latitude, pos.longitude);
       notifyListeners();

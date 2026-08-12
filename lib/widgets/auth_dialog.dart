@@ -167,7 +167,7 @@ class _AuthDialogState extends State<AuthDialog> with SingleTickerProviderStateM
               border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.12),
+                  color: Colors.black.withValues(alpha: 0.12),
                   blurRadius: 24,
                   offset: const Offset(0, 8),
                 )

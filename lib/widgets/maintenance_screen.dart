@@ -42,7 +42,7 @@ class MaintenanceScreen extends StatelessWidget {
                   height: 320,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xFF10B981).withOpacity(0.18), // Emerald glow
+                    color: const Color(0xFF10B981).withValues(alpha: 0.18), // Emerald glow
                   ),
                 ),
               ),
@@ -59,7 +59,7 @@ class MaintenanceScreen extends StatelessWidget {
                   height: 380,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xFFFBBF24).withOpacity(0.08), // Amber glow
+                    color: const Color(0xFFFBBF24).withValues(alpha: 0.08), // Amber glow
                   ),
                 ),
               ),
@@ -69,22 +69,22 @@ class MaintenanceScreen extends StatelessWidget {
             Positioned(
               top: MediaQuery.of(context).size.height * 0.15,
               left: MediaQuery.of(context).size.width * 0.2,
-              child: _buildFirefly(Color(0xFFA7F3D0).withOpacity(0.6), 6),
+              child: _buildFirefly(Color(0xFFA7F3D0).withValues(alpha: 0.6), 6),
             ),
             Positioned(
               top: MediaQuery.of(context).size.height * 0.35,
               right: MediaQuery.of(context).size.width * 0.15,
-              child: _buildFirefly(Color(0xFFFDE047).withOpacity(0.5), 8),
+              child: _buildFirefly(Color(0xFFFDE047).withValues(alpha: 0.5), 8),
             ),
             Positioned(
               bottom: MediaQuery.of(context).size.height * 0.25,
               right: MediaQuery.of(context).size.width * 0.25,
-              child: _buildFirefly(Color(0xFF34D399).withOpacity(0.7), 5),
+              child: _buildFirefly(Color(0xFF34D399).withValues(alpha: 0.7), 5),
             ),
             Positioned(
               bottom: MediaQuery.of(context).size.height * 0.15,
               left: MediaQuery.of(context).size.width * 0.3,
-              child: _buildFirefly(Color(0xFFA7F3D0).withOpacity(0.4), 7),
+              child: _buildFirefly(Color(0xFFA7F3D0).withValues(alpha: 0.4), 7),
             ),
             
             // Contenido Central (Tarjeta de Vidrio Esmerilado)
@@ -95,15 +95,15 @@ class MaintenanceScreen extends StatelessWidget {
                   constraints: const BoxConstraints(maxWidth: 460),
                   padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 50),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.02),
+                    color: Colors.white.withValues(alpha: 0.02),
                     borderRadius: BorderRadius.circular(36),
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.08),
+                      color: Colors.white.withValues(alpha: 0.08),
                       width: 1.5,
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.4),
+                        color: Colors.black.withValues(alpha: 0.4),
                         blurRadius: 40,
                         offset: const Offset(0, 20),
                       ),
@@ -116,10 +116,10 @@ class MaintenanceScreen extends StatelessWidget {
                       Container(
                         padding: const EdgeInsets.all(24),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF10B981).withOpacity(0.12),
+                          color: const Color(0xFF10B981).withValues(alpha: 0.12),
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: const Color(0xFF10B981).withOpacity(0.25),
+                            color: const Color(0xFF10B981).withValues(alpha: 0.25),
                             width: 1.5,
                           ),
                         ),
@@ -199,7 +199,7 @@ class MaintenanceScreen extends StatelessWidget {
         color: color,
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.8),
+            color: color.withValues(alpha: 0.8),
             blurRadius: size * 1.5,
             spreadRadius: size * 0.5,
           ),

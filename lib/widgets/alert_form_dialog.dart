@@ -49,7 +49,9 @@ class _AlertFormDialogState extends State<AlertFormDialog> {
 
   // Carga real de fotos utilizando FilePicker y Django REST api
   void _pickAndUploadImage() async {
+    final appState = Provider.of<AppState>(context, listen: false);
     final result = await FilePicker.platform.pickFiles(type: FileType.image);
+    if (!mounted) return;
     if (result != null && result.files.first.bytes != null) {
       setState(() {
         _isUploadingImage = true;
@@ -57,9 +59,9 @@ class _AlertFormDialogState extends State<AlertFormDialog> {
         _selectedFileBytes = result.files.first.bytes;
       });
       
-      final appState = Provider.of<AppState>(context, listen: false);
       final url = await appState.uploadImage(_selectedFileBytes!, _mockImageName!);
       
+      if (!mounted) return;
       setState(() {
         _isUploadingImage = false;
         if (url != null) {
@@ -95,7 +97,7 @@ class _AlertFormDialogState extends State<AlertFormDialog> {
               border: Border.all(color: const Color(0xFFE2E8F0), width: 2),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.12),
+                  color: Colors.black.withValues(alpha: 0.12),
                   blurRadius: 24,
                   offset: const Offset(0, 10),
                 )
@@ -444,7 +446,7 @@ class _AlertFormDialogState extends State<AlertFormDialog> {
                 duration: const Duration(milliseconds: 150),
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
-                  color: isSelected ? color.withOpacity(0.12) : const Color(0xFFF1F5F9),
+                  color: isSelected ? color.withValues(alpha: 0.12) : const Color(0xFFF1F5F9),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: isSelected ? color : const Color(0xFFE2E8F0),
@@ -501,7 +503,7 @@ class _AlertFormDialogState extends State<AlertFormDialog> {
                 duration: const Duration(milliseconds: 150),
                 padding: const EdgeInsets.symmetric(vertical: 10),
                 decoration: BoxDecoration(
-                  color: isSelected ? color.withOpacity(0.12) : const Color(0xFFF1F5F9),
+                  color: isSelected ? color.withValues(alpha: 0.12) : const Color(0xFFF1F5F9),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
                     color: isSelected ? color : const Color(0xFFE2E8F0),
@@ -585,8 +587,8 @@ class _AlertFormDialogState extends State<AlertFormDialog> {
               border: Border.all(color: const Color(0xFFE2E8F0)),
               gradient: LinearGradient(
                 colors: [
-                  const Color(0xFF0288D1).withOpacity(0.2),
-                  const Color(0xFF00897B).withOpacity(0.1),
+                  const Color(0xFF0288D1).withValues(alpha: 0.2),
+                  const Color(0xFF00897B).withValues(alpha: 0.1),
                 ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,

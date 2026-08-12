@@ -212,9 +212,9 @@ class _EcoMapViewState extends State<EcoMapView> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: wasteColor.withOpacity(0.1),
+                  color: wasteColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: wasteColor.withOpacity(0.3)),
+                  border: Border.all(color: wasteColor.withValues(alpha: 0.3)),
                 ),
                 child: Text(
                   wasteText,
@@ -450,7 +450,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                         height: 46,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: clusterColor.withOpacity(0.25),
+                          color: clusterColor.withValues(alpha: 0.25),
                         ),
                       ),
                       Container(
@@ -462,7 +462,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                           border: Border.all(color: Colors.white, width: 2),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
+                              color: Colors.black.withValues(alpha: 0.2),
                               blurRadius: 6,
                               offset: const Offset(0, 2),
                             ),
@@ -517,15 +517,15 @@ class _EcoMapViewState extends State<EcoMapView> {
         switch (alert.severity) {
           case EcoSeverity.critico:
             radius = 200.0;
-            color = const Color(0xFFEF4444).withOpacity(0.24); // Red
+            color = const Color(0xFFEF4444).withValues(alpha: 0.24); // Red
             break;
           case EcoSeverity.medio:
             radius = 140.0;
-            color = const Color(0xFFF59E0B).withOpacity(0.20); // Orange
+            color = const Color(0xFFF59E0B).withValues(alpha: 0.20); // Orange
             break;
           case EcoSeverity.bajo:
             radius = 90.0;
-            color = const Color(0xFF10B981).withOpacity(0.15); // Emerald/Green
+            color = const Color(0xFF10B981).withValues(alpha: 0.15); // Emerald/Green
             break;
         }
         
@@ -556,7 +556,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                 height: 24,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xFF0288D1).withOpacity(0.25),
+                  color: const Color(0xFF0288D1).withValues(alpha: 0.25),
                 ),
               ),
               Container(
@@ -571,7 +571,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
+                      color: Colors.black.withValues(alpha: 0.2),
                       blurRadius: 4,
                       offset: const Offset(0, 1),
                     ),
@@ -625,7 +625,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                     height: 38,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: itemColor.withOpacity(0.2),
+                      color: itemColor.withValues(alpha: 0.2),
                     ),
                   ),
                   Container(
@@ -637,7 +637,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                       border: Border.all(color: Colors.white, width: 2),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.15),
+                          color: Colors.black.withValues(alpha: 0.15),
                           blurRadius: 4,
                           offset: const Offset(0, 2),
                         )
@@ -706,7 +706,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                       polylines: [
                         Polyline(
                           points: appState.truckRoutePoints,
-                          color: const Color(0xFF2E7D32).withOpacity(0.55),
+                          color: const Color(0xFF2E7D32).withValues(alpha: 0.55),
                           strokeWidth: 4.5,
                         ),
                       ],
@@ -724,7 +724,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                             LatLng(-10.6655, -76.2480),
                             LatLng(-10.6800, -76.2480),
                           ],
-                          color: const Color(0xFFFFB74D).withOpacity(0.12),
+                          color: const Color(0xFFFFB74D).withValues(alpha: 0.12),
                           borderColor: const Color(0xFFFB8C00),
                           borderStrokeWidth: 2.0,
                         ),
@@ -736,7 +736,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                             LatLng(-10.6500, -76.2450),
                             LatLng(-10.6655, -76.2450),
                           ],
-                          color: const Color(0xFF64B5F6).withOpacity(0.12),
+                          color: const Color(0xFF64B5F6).withValues(alpha: 0.12),
                           borderColor: const Color(0xFF1E88E5),
                           borderStrokeWidth: 2.0,
                         ),
@@ -748,7 +748,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                             LatLng(-10.6500, -76.2630),
                             LatLng(-10.6800, -76.2630),
                           ],
-                          color: const Color(0xFF81C784).withOpacity(0.12),
+                          color: const Color(0xFF81C784).withValues(alpha: 0.12),
                           borderColor: const Color(0xFF43A047),
                           borderStrokeWidth: 2.0,
                         ),
@@ -762,8 +762,8 @@ class _EcoMapViewState extends State<EcoMapView> {
                           point: appState.userLocation!,
                           radius: appState.proximityRadius,
                           useRadiusInMeter: true,
-                          color: const Color(0xFF0288D1).withOpacity(0.08),
-                          borderColor: const Color(0xFF0288D1).withOpacity(0.45),
+                          color: const Color(0xFF0288D1).withValues(alpha: 0.08),
+                          borderColor: const Color(0xFF0288D1).withValues(alpha: 0.45),
                           borderStrokeWidth: 1.5,
                         ),
                       ],
@@ -792,7 +792,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                         border: Border.all(color: const Color(0xFFEF4444), width: 2), // Red 500
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.12),
+                            color: Colors.black.withValues(alpha: 0.12),
                             blurRadius: 16,
                             offset: const Offset(0, 4),
                           )
@@ -869,7 +869,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                             border: Border.all(color: const Color(0xFF334155), width: 1.5),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.25),
+                                color: Colors.black.withValues(alpha: 0.25),
                                 blurRadius: 12,
                                 offset: const Offset(0, 4),
                               )
@@ -910,9 +910,9 @@ class _EcoMapViewState extends State<EcoMapView> {
                               height: 56,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: const Color(0xFF0288D1).withOpacity(0.08),
+                                color: const Color(0xFF0288D1).withValues(alpha: 0.08),
                                 border: Border.all(
-                                  color: const Color(0xFF0288D1).withOpacity(0.35),
+                                  color: const Color(0xFF0288D1).withValues(alpha: 0.35),
                                   width: 1,
                                 ),
                               ),
@@ -924,7 +924,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                               height: 26,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: Colors.white.withOpacity(0.85),
+                                color: Colors.white.withValues(alpha: 0.85),
                                 border: Border.all(
                                   color: const Color(0xFF0288D1),
                                   width: 2,
@@ -970,7 +970,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                         border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.08),
+                            color: Colors.black.withValues(alpha: 0.08),
                             blurRadius: 8,
                             offset: const Offset(0, 2),
                           )
@@ -995,7 +995,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                         border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.08),
+                            color: Colors.black.withValues(alpha: 0.08),
                             blurRadius: 8,
                             offset: const Offset(0, 2),
                           )
@@ -1030,7 +1030,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                         border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.08),
+                            color: Colors.black.withValues(alpha: 0.08),
                             blurRadius: 8,
                             offset: const Offset(0, 2),
                           )
@@ -1068,7 +1068,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                           border: Border.all(color: const Color(0xFF0288D1), width: 1.5),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.08),
+                              color: Colors.black.withValues(alpha: 0.08),
                               blurRadius: 8,
                             )
                           ],
@@ -1102,7 +1102,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.08),
+                              color: Colors.black.withValues(alpha: 0.08),
                               blurRadius: 8,
                               offset: const Offset(0, 2),
                             )
@@ -1146,7 +1146,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.08),
+                              color: Colors.black.withValues(alpha: 0.08),
                               blurRadius: 8,
                               offset: const Offset(0, 2),
                             )
@@ -1189,7 +1189,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.08),
+                              color: Colors.black.withValues(alpha: 0.08),
                               blurRadius: 8,
                               offset: const Offset(0, 2),
                             )
@@ -1229,7 +1229,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                         border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.08),
+                            color: Colors.black.withValues(alpha: 0.08),
                             blurRadius: 8,
                             offset: const Offset(0, 2),
                           )
@@ -1287,7 +1287,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                         border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.08),
+                            color: Colors.black.withValues(alpha: 0.08),
                             blurRadius: 8,
                             offset: const Offset(0, 2),
                           )
@@ -1324,7 +1324,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                       border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.08),
+                          color: Colors.black.withValues(alpha: 0.08),
                           blurRadius: 10,
                           offset: const Offset(0, 2),
                         )
@@ -1465,7 +1465,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                         border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.12),
+                            color: Colors.black.withValues(alpha: 0.12),
                             blurRadius: 16,
                             offset: const Offset(0, 4),
                           )
@@ -1718,7 +1718,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                                 ),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Colors.black.withOpacity(0.04),
+                                    color: Colors.black.withValues(alpha: 0.04),
                                     blurRadius: 4,
                                     offset: const Offset(0, 2),
                                   )
@@ -1734,7 +1734,7 @@ class _EcoMapViewState extends State<EcoMapView> {
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                         decoration: BoxDecoration(
-                                          color: sevColor.withOpacity(0.12),
+                                          color: sevColor.withValues(alpha: 0.12),
                                           borderRadius: BorderRadius.circular(6),
                                         ),
                                         child: Text(
@@ -1980,7 +1980,7 @@ class _MapPin extends StatelessWidget {
               height: 42,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: color.withOpacity(0.3),
+                color: color.withValues(alpha: 0.3),
                 boxShadow: [
                   BoxShadow(
                     color: color,
@@ -2004,7 +2004,7 @@ class _MapPin extends StatelessWidget {
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.18),
+                  color: Colors.black.withValues(alpha: 0.18),
                   blurRadius: 4,
                   offset: const Offset(0, 2),
                 )
@@ -2125,7 +2125,7 @@ class _AlertDetailCard extends StatelessWidget {
                               Container(
                                 padding: const EdgeInsets.all(6),
                                 decoration: BoxDecoration(
-                                  color: color.withOpacity(0.12),
+                                  color: color.withValues(alpha: 0.12),
                                   shape: BoxShape.circle,
                                 ),
                                 child: Icon(icon, color: color, size: 14),
@@ -2630,7 +2630,7 @@ class _AlertDetailCard extends StatelessWidget {
         border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withValues(alpha: 0.1),
             blurRadius: 16,
             offset: const Offset(0, 4),
           )
@@ -2649,9 +2649,9 @@ class _AlertDetailCard extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: sevColor.withOpacity(0.12),
+                      color: sevColor.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: sevColor.withOpacity(0.3), width: 1),
+                      border: Border.all(color: sevColor.withValues(alpha: 0.3), width: 1),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -2674,9 +2674,9 @@ class _AlertDetailCard extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: statusColor.withOpacity(0.12),
+                      color: statusColor.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: statusColor.withOpacity(0.3), width: 1),
+                      border: Border.all(color: statusColor.withValues(alpha: 0.3), width: 1),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -2741,13 +2741,13 @@ class _AlertDetailCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(12),
                       gradient: LinearGradient(
                         colors: [
-                          sevColor.withOpacity(0.35),
-                          sevColor.withOpacity(0.12),
+                          sevColor.withValues(alpha: 0.35),
+                          sevColor.withValues(alpha: 0.12),
                         ],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
-                      border: Border.all(color: sevColor.withOpacity(0.2), width: 1.5),
+                      border: Border.all(color: sevColor.withValues(alpha: 0.2), width: 1.5),
                     ),
                     child: Center(
                       child: Column(
@@ -3109,7 +3109,7 @@ class _ImageLightboxDialog extends StatelessWidget {
           GestureDetector(
             onTap: () => Navigator.of(context).pop(),
             child: Container(
-              color: Colors.black.withOpacity(0.85),
+              color: Colors.black.withValues(alpha: 0.85),
             ),
           ),
           Container(
@@ -3118,10 +3118,10 @@ class _ImageLightboxDialog extends StatelessWidget {
             margin: const EdgeInsets.symmetric(horizontal: 24),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: severityColor.withOpacity(0.5), width: 2),
+              border: Border.all(color: severityColor.withValues(alpha: 0.5), width: 2),
               gradient: LinearGradient(
                 colors: [
-                  severityColor.withOpacity(0.7),
+                  severityColor.withValues(alpha: 0.7),
                   const Color(0xFF0F172A),
                 ],
                 begin: Alignment.topLeft,
@@ -3152,7 +3152,7 @@ class _ImageLightboxDialog extends StatelessWidget {
                       Text(
                         '🔍 Evidencia fotográfica de campo',
                         style: GoogleFonts.outfit(
-                          color: Colors.white.withOpacity(0.7),
+                          color: Colors.white.withValues(alpha: 0.7),
                           fontSize: 12,
                         ),
                       ),

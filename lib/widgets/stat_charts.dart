@@ -232,7 +232,7 @@ class SeverityBarChart extends StatelessWidget {
               barTouchData: BarTouchData(
                 enabled: true,
                 touchTooltipData: BarTouchTooltipData(
-                  getTooltipColor: (_) => const Color(0xFF0F172A).withOpacity(0.95),
+                  getTooltipColor: (_) => const Color(0xFF0F172A).withValues(alpha: 0.95),
                   tooltipPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   tooltipMargin: 4,
                   getTooltipItem: (group, groupIndex, rod, rodIndex) {

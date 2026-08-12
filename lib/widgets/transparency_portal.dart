@@ -86,7 +86,7 @@ class TransparencyPortalView extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: const Color(0xFF10B981).withOpacity(0.1),
+                color: const Color(0xFF10B981).withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: const Icon(Icons.emoji_events_rounded, color: Color(0xFF10B981), size: 28),
@@ -154,7 +154,7 @@ class TransparencyPortalView extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF059669).withOpacity(0.2),
+                    color: const Color(0xFF059669).withValues(alpha: 0.2),
                     blurRadius: 16,
                     offset: const Offset(0, 4),
                   )
@@ -399,7 +399,7 @@ class TransparencyPortalView extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
+              color: color.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(icon, color: color, size: 24),
@@ -451,11 +451,11 @@ class TransparencyPortalView extends StatelessWidget {
                     imageUrl,
                     fit: BoxFit.cover,
                     errorBuilder: (c, e, s) => Center(
-                      child: Icon(Icons.broken_image_rounded, color: textColor.withOpacity(0.5), size: 32),
+                      child: Icon(Icons.broken_image_rounded, color: textColor.withValues(alpha: 0.5), size: 32),
                     ),
                   )
                 : Center(
-                    child: Icon(Icons.image_not_supported_rounded, color: textColor.withOpacity(0.5), size: 32),
+                    child: Icon(Icons.image_not_supported_rounded, color: textColor.withValues(alpha: 0.5), size: 32),
                   ),
           ),
         ),
@@ -494,7 +494,7 @@ class TransparencyPortalView extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
