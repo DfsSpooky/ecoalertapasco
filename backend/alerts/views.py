@@ -3,6 +3,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.authtoken.models import Token
+from rest_framework_simplejwt.tokens import RefreshToken
+
 from django.contrib.auth import authenticate, get_user_model
 from django.utils import timezone
 from django.conf import settings
@@ -230,9 +232,10 @@ class LoginView(APIView):
         
         user = authenticate(username=username, password=password)
         if user:
-            token, created = Token.objects.get_or_create(user=user)
+            refresh = RefreshToken.for_user(user)
             return Response({
-                'token': token.key,
+                'token': str(refresh.access_token),
+                'refresh': str(refresh),
                 'username': user.username,
                 'is_staff': user.is_staff,
                 'is_superuser': user.is_superuser
@@ -260,15 +263,82 @@ class RegisterView(APIView):
 
         try:
             user = User.objects.create_user(username=username, email=email, password=password)
-            token, created = Token.objects.get_or_create(user=user)
+            refresh = RefreshToken.for_user(user)
             return Response({
-                'token': token.key,
+                'token': str(refresh.access_token),
+                'refresh': str(refresh),
                 'username': user.username,
                 'is_staff': user.is_staff,
                 'is_superuser': user.is_superuser
             }, status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+import google.generativeai as genai
+
+def validate_image_with_gemini(image_file):
+    """
+    Analiza la imagen utilizando Gemini 1.5 Flash para verificar si es 
+    coherente con reportar incidentes ambientales.
+    Retorna (True, None) si es válida, o (False, error_message) si debe rechazarse.
+    """
+    api_key = getattr(settings, 'GEMINI_API_KEY', '')
+    if not api_key:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Gemini API Key no configurada. Saltando validación real (Simulado APROBADO).")
+        return True, None
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Leer los bytes de la imagen
+        image_data = image_file.read()
+        image_file.seek(0) # Resetear puntero
+        
+        prompt = (
+            "Eres un asistente de moderación de contenido para una plataforma ciudadana "
+            "de reportes ambientales llamada EcoAlerta. Analiza esta imagen y responde únicamente "
+            "con un JSON con la estructura: {\"approved\": true/false, \"reason\": \"explicación breve en español\"}.\n"
+            "Aprueba la imagen (approved: true) únicamente si muestra indicios razonables de "
+            "impacto ecológico o problemas ambientales como basura/residuos sólidos acumulados, "
+            "humo denso/contaminación del aire, ríos sucios/vertidos de agua, relaves o desmonte de "
+            "actividad minera, o afines. Recházala (approved: false) si contiene fotos de personas, "
+            "rostros legibles de menores de edad, contenido vulgar, pantallas en blanco, o cualquier "
+            "cosa que no tenga ninguna relación con problemas medioambientales."
+        )
+        
+        contents = [
+            {
+                "mime_type": image_file.content_type if hasattr(image_file, 'content_type') else 'image/jpeg',
+                "data": image_data
+            },
+            prompt
+        ]
+        
+        response = model.generate_content(contents)
+        text_response = response.text.strip()
+        
+        if "```json" in text_response:
+            text_response = text_response.split("```json")[1].split("```")[0].strip()
+        elif "```" in text_response:
+            text_response = text_response.split("```")[1].split("```")[0].strip()
+            
+        result = json.loads(text_response)
+        approved = result.get("approved", True)
+        reason = result.get("reason", "Imagen no apta para reportes de contaminación ambiental.")
+        
+        if not approved:
+            return False, reason
+        return True, None
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error en validación con Gemini: {e}")
+        return True, None
+
 
 class ImageUploadView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -291,12 +361,18 @@ class ImageUploadView(APIView):
         if ext not in allowed_extensions:
             return Response({'error': 'Formato de archivo no permitido. Solo se permiten imágenes (jpg, jpeg, png, webp, gif).'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 3. Generar un nombre de archivo seguro y único (UUID)
+        # 3. Validar contenido visual de la imagen mediante Inteligencia Artificial (Gemini)
+        is_valid, error_msg = validate_image_with_gemini(file_obj)
+        if not is_valid:
+            return Response({'error': f'Moderación de Imagen: {error_msg}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 4. Generar un nombre de archivo seguro y único (UUID)
         safe_filename = f"{uuid.uuid4()}{ext}"
         
         file_name = default_storage.save(os.path.join('uploads', safe_filename), file_obj)
         file_url = request.build_absolute_uri(settings.MEDIA_URL + file_name)
         return Response({'url': file_url})
+
 
 import time
 from django.http import StreamingHttpResponse

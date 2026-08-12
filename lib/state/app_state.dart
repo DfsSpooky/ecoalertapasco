@@ -10,6 +10,8 @@ import '../models/eco_alert.dart';
 import '../models/waste_point.dart';
 import '../services/eco_alert_service.dart';
 import '../utils/web_utils.dart';
+import '../utils/image_compressor.dart';
+
 
 class AppState extends ChangeNotifier {
   final EcoAlertService _alertService;
@@ -66,12 +68,16 @@ class AppState extends ChangeNotifier {
 
   // Campos de autenticación
   String? _authToken;
+  String? _refreshToken;
   bool _isLoggedInAuthority = false;
+  bool _isOffline = false;
+
   String? _loggedUsername;
   bool _showAuthorityDashboard = false;
   bool _showDismissed = false;
   EcoAlert? _selectedAlert;
   bool _showTransparencyPortal = false;
+
 
   String _currentGeocodedAddress = 'Alineando mira...';
   Timer? _geocodeDebounce;
@@ -212,6 +218,24 @@ class AppState extends ChangeNotifier {
     _isAlertsLoaded = false;
     notifyListeners();
 
+    // Recuperar sesión persistente de JWT
+    try {
+      final token = getLocalData('access_token');
+      final refresh = getLocalData('refresh_token');
+      final username = getLocalData('logged_username');
+      final isStaffStr = getLocalData('is_staff');
+      final isSuperuserStr = getLocalData('is_superuser');
+      
+      if (token != null && token.isNotEmpty) {
+        _authToken = token;
+        _refreshToken = refresh;
+        _loggedUsername = username;
+        _isLoggedInAuthority = isStaffStr == 'true';
+        _isSuperuser = isSuperuserStr == 'true';
+        _alertService.setToken(token);
+      }
+    } catch (_) {}
+
     _subscription = _alertService.watchAlerts().listen((alerts) {
       _allAlerts = alerts.toList(); // Hacer una copia editable
       _isAlertsLoaded = true;
@@ -221,6 +245,7 @@ class AppState extends ChangeNotifier {
     loadWasteData();
     loadSiteSettings();
   }
+
 
   void _checkLoadingFinished() {
     if (_isAlertsLoaded && _isSettingsLoaded) {
@@ -233,6 +258,7 @@ class AppState extends ChangeNotifier {
     try {
       final settings = await _alertService.fetchSiteSettings();
       if (settings.isNotEmpty) {
+        _isOffline = false;
         _isMaintenanceMode = settings['is_maintenance_mode'] ?? false;
         _maintenanceMessage = settings['maintenance_message'] ?? '';
         _logoUrl = settings['logo'];
@@ -268,12 +294,15 @@ class AppState extends ChangeNotifier {
           }
           changeFavicon(fullIconUrl);
         }
+      } else {
+        _isOffline = true;
       }
     } catch (e) {
-      // fallback silencioso
+      _isOffline = true;
     } finally {
       _isSettingsLoaded = true;
       _checkLoadingFinished();
+      notifyListeners();
     }
   }
 
@@ -283,15 +312,19 @@ class AppState extends ChangeNotifier {
       final route = await _alertService.fetchCollectorRoute();
       if (points.isNotEmpty) {
         _wastePoints = points;
+        _isOffline = false;
       }
       if (route.isNotEmpty) {
         _truckRoutePoints = route;
+        _isOffline = false;
       }
       notifyListeners();
     } catch (e) {
-      // fallback silencioso
+      _isOffline = true;
+      notifyListeners();
     }
   }
+
 
   List<WastePoint> get wastePoints => _wastePoints;
   List<LatLng> get truckRoutePoints => _truckRoutePoints;
@@ -299,6 +332,8 @@ class AppState extends ChangeNotifier {
   // Getters
   List<EcoAlert> get allAlerts => _allAlerts;
   bool get isLoading => _isLoading;
+  bool get isOffline => _isOffline;
+
   Set<EcoCategory> get selectedCategories => _selectedCategories;
   Set<EcoSeverity> get selectedSeverities => _selectedSeverities;
   EcoDistrict? get selectedDistrict => _selectedDistrict;
@@ -821,16 +856,26 @@ class AppState extends ChangeNotifier {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final token = data['token'] as String?;
+        final refresh = data['refresh'] as String?;
         final isStaff = data['is_staff'] as bool? ?? false;
         final isSuperuser = data['is_superuser'] as bool? ?? false;
         final name = data['username'] as String?;
 
         if (token != null) {
           _authToken = token;
+          _refreshToken = refresh;
           _isLoggedInAuthority = isStaff;
           _isSuperuser = isSuperuser;
           _loggedUsername = name;
           _alertService.setToken(token);
+
+          // Guardar en almacenamiento local
+          saveLocalData('access_token', token);
+          if (refresh != null) saveLocalData('refresh_token', refresh);
+          if (name != null) saveLocalData('logged_username', name);
+          saveLocalData('is_staff', isStaff.toString());
+          saveLocalData('is_superuser', isSuperuser.toString());
+
           notifyListeners();
           return true;
         }
@@ -856,16 +901,26 @@ class AppState extends ChangeNotifier {
       if (response.statusCode == 201 || response.statusCode == 200) {
         final data = json.decode(response.body);
         final token = data['token'] as String?;
+        final refresh = data['refresh'] as String?;
         final isStaff = data['is_staff'] as bool? ?? false;
         final isSuperuser = data['is_superuser'] as bool? ?? false;
         final name = data['username'] as String?;
 
         if (token != null) {
           _authToken = token;
+          _refreshToken = refresh;
           _isLoggedInAuthority = isStaff;
           _isSuperuser = isSuperuser;
           _loggedUsername = name;
           _alertService.setToken(token);
+
+          // Guardar en almacenamiento local
+          saveLocalData('access_token', token);
+          if (refresh != null) saveLocalData('refresh_token', refresh);
+          if (name != null) saveLocalData('logged_username', name);
+          saveLocalData('is_staff', isStaff.toString());
+          saveLocalData('is_superuser', isSuperuser.toString());
+
           notifyListeners();
           return true;
         }
@@ -878,6 +933,7 @@ class AppState extends ChangeNotifier {
 
   void logout() {
     _authToken = null;
+    _refreshToken = null;
     _isLoggedInAuthority = false;
     _isSuperuser = false;
     _loggedUsername = null;
@@ -886,25 +942,37 @@ class AppState extends ChangeNotifier {
     _selectedAlert = null;
     _showTransparencyPortal = false;
     _alertService.setToken(null);
+
+    // Limpiar almacenamiento local
+    saveLocalData('access_token', '');
+    saveLocalData('refresh_token', '');
+    saveLocalData('logged_username', '');
+    saveLocalData('is_staff', 'false');
+    saveLocalData('is_superuser', 'false');
+
     notifyListeners();
   }
 
+
   Future<String?> uploadImage(List<int> bytes, String fileName) async {
     try {
+      // Compresión local de la imagen antes de subirla
+      final compressedBytes = ImageCompressor.compress(bytes);
+
       final request = http.MultipartRequest(
         'POST',
         Uri.parse('$apiBaseUrl/api/upload/'),
       );
       
       if (_authToken != null) {
-        request.headers['Authorization'] = 'Token $_authToken';
+        request.headers['Authorization'] = 'Bearer $_authToken';
       }
       
       request.files.add(
         http.MultipartFile.fromBytes(
           'image',
-          bytes,
-          filename: fileName,
+          compressedBytes,
+          filename: fileName.endsWith('.jpg') || fileName.endsWith('.jpeg') ? fileName : '${fileName}_compressed.jpg',
         ),
       );
 
@@ -920,6 +988,7 @@ class AppState extends ChangeNotifier {
       return null;
     }
   }
+
 
   @override
   void dispose() {

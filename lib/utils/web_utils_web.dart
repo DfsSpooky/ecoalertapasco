@@ -23,3 +23,18 @@ void openUrl(String url) {
     // ignore
   }
 }
+
+void saveLocalData(String key, String value) {
+  try {
+    html.window.localStorage[key] = value;
+  } catch (_) {}
+}
+
+String? getLocalData(String key) {
+  try {
+    return html.window.localStorage[key];
+  } catch (_) {
+    return null;
+  }
+}
+

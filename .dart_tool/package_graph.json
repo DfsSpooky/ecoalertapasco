@@ -15,6 +15,7 @@
         "geolocator",
         "google_fonts",
         "http",
+        "image",
         "latlong2",
         "provider",
         "supabase_flutter"
@@ -1085,6 +1086,31 @@
         "ffi",
         "meta",
         "path"
+      ]
+    },
+    {
+      "name": "image",
+      "version": "4.9.1",
+      "dependencies": [
+        "archive",
+        "xml"
+      ]
+    },
+    {
+      "name": "xml",
+      "version": "7.0.1",
+      "dependencies": [
+        "collection",
+        "meta",
+        "petitparser"
+      ]
+    },
+    {
+      "name": "petitparser",
+      "version": "7.0.2",
+      "dependencies": [
+        "collection",
+        "meta"
       ]
     }
   ],

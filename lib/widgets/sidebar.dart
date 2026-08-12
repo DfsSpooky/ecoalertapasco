@@ -136,9 +136,32 @@ class LeftSidebar extends StatelessWidget {
             ),
           ),
           const Divider(color: Color(0xFFE2E8F0), height: 1),
+          if (appState.isOffline)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+              color: const Color(0xFFFFF3CD), // Amber 100
+              child: Row(
+                children: [
+                  const Icon(Icons.wifi_off_rounded, color: Color(0xFF856404), size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Modo local (Sin conexión)',
+                      style: GoogleFonts.outfit(
+                        color: const Color(0xFF856404),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           
           // Contenido con scroll
           Expanded(
+
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(16.0),
               child: Column(

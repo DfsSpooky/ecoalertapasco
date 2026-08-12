@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:latlong2/latlong.dart';
 import '../models/eco_alert.dart';
 import '../models/waste_point.dart';
+import '../utils/web_utils.dart';
 import 'eco_alert_service.dart';
 
 class DjangoAlertService implements EcoAlertService {
@@ -37,8 +38,21 @@ class DjangoAlertService implements EcoAlertService {
   }
 
   void _initConnection() {
+    _loadLocalCache();
     _fetchAndEmit();
     _startSse();
+  }
+
+  void _loadLocalCache() {
+    try {
+      final jsonStr = getLocalData('cached_alerts');
+      if (jsonStr != null && jsonStr.isNotEmpty) {
+        final List<dynamic> data = json.decode(jsonStr);
+        final alerts = data.map((item) => EcoAlert.fromJson(item)).toList();
+        _cachedAlerts = alerts;
+        _controller.add(List.unmodifiable(_cachedAlerts));
+      }
+    } catch (_) {}
   }
 
   // Cliente SSE multiplataforma basado en streams HTTP
@@ -91,6 +105,8 @@ class DjangoAlertService implements EcoAlertService {
         final alerts = data.map((item) => EcoAlert.fromJson(item)).toList();
         _cachedAlerts = alerts;
         _controller.add(List.unmodifiable(_cachedAlerts));
+        // Guardar en caché local
+        saveLocalData('cached_alerts', json.encode(data));
       }
     } catch (e) {
       // Emitir el caché anterior en caso de desconexión
@@ -108,17 +124,68 @@ class DjangoAlertService implements EcoAlertService {
     _token = token;
   }
 
+  Future<bool> _refreshAccessToken() async {
+    try {
+      final refreshToken = getLocalData('refresh_token');
+      if (refreshToken == null || refreshToken.isEmpty) return false;
+
+      final response = await http.post(
+        Uri.parse('${baseApiUrl}auth/token/refresh/'),
+        headers: {'Content-Type': 'application/json; charset=UTF-8'},
+        body: json.encode({'refresh': refreshToken}),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final newAccessToken = data['access'] as String?;
+        if (newAccessToken != null) {
+          _token = newAccessToken;
+          saveLocalData('access_token', newAccessToken);
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  Future<http.Response> _postWithAuth(String url, Map<String, String> headers, Object? body) async {
+    if (_token != null) {
+      headers['Authorization'] = 'Bearer $_token';
+    }
+    var response = await http.post(Uri.parse(url), headers: headers, body: body);
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessToken();
+      if (refreshed) {
+        headers['Authorization'] = 'Bearer $_token';
+        response = await http.post(Uri.parse(url), headers: headers, body: body);
+      }
+    }
+    return response;
+  }
+
+  Future<http.Response> _patchWithAuth(String url, Map<String, String> headers, Object? body) async {
+    if (_token != null) {
+      headers['Authorization'] = 'Bearer $_token';
+    }
+    var response = await http.patch(Uri.parse(url), headers: headers, body: body);
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessToken();
+      if (refreshed) {
+        headers['Authorization'] = 'Bearer $_token';
+        response = await http.patch(Uri.parse(url), headers: headers, body: body);
+      }
+    }
+    return response;
+  }
+
   @override
   Future<void> addAlert(EcoAlert alert) async {
     try {
       final headers = {'Content-Type': 'application/json; charset=UTF-8'};
-      if (_token != null) {
-        headers['Authorization'] = 'Token $_token';
-      }
-      final response = await http.post(
-        Uri.parse(baseUrl),
-        headers: headers,
-        body: json.encode(alert.toJson()),
+      final response = await _postWithAuth(
+        baseUrl,
+        headers,
+        json.encode(alert.toJson()),
       );
       if (response.statusCode == 201 || response.statusCode == 200) {
         _fetchAndEmit();
@@ -132,13 +199,10 @@ class DjangoAlertService implements EcoAlertService {
   Future<bool> resolveAlert(String id, String comment, String imageUrl) async {
     try {
       final headers = {'Content-Type': 'application/json; charset=UTF-8'};
-      if (_token != null) {
-        headers['Authorization'] = 'Token $_token';
-      }
-      final response = await http.patch(
-        Uri.parse('$baseUrl$id/'),
-        headers: headers,
-        body: json.encode({
+      final response = await _patchWithAuth(
+        '$baseUrl$id/',
+        headers,
+        json.encode({
           'status': 'solved',
           'resolution_comment': comment,
           'resolution_image_url': imageUrl,
@@ -158,13 +222,10 @@ class DjangoAlertService implements EcoAlertService {
   Future<bool> dismissAlert(String id, String comment) async {
     try {
       final headers = {'Content-Type': 'application/json; charset=UTF-8'};
-      if (_token != null) {
-        headers['Authorization'] = 'Token $_token';
-      }
-      final response = await http.patch(
-        Uri.parse('$baseUrl$id/'),
-        headers: headers,
-        body: json.encode({
+      final response = await _patchWithAuth(
+        '$baseUrl$id/',
+        headers,
+        json.encode({
           'status': 'dismissed',
           'resolution_comment': comment,
         }),
@@ -183,13 +244,10 @@ class DjangoAlertService implements EcoAlertService {
   Future<bool> transferAlert(String id, EcoDistrict newDistrict) async {
     try {
       final headers = {'Content-Type': 'application/json; charset=UTF-8'};
-      if (_token != null) {
-        headers['Authorization'] = 'Token $_token';
-      }
-      final response = await http.patch(
-        Uri.parse('$baseUrl$id/'),
-        headers: headers,
-        body: json.encode({
+      final response = await _patchWithAuth(
+        '$baseUrl$id/',
+        headers,
+        json.encode({
           'district': newDistrict.toString().split('.').last,
         }),
       );
@@ -214,10 +272,18 @@ class DjangoAlertService implements EcoAlertService {
       final response = await http.get(Uri.parse('${baseApiUrl}municipal-dumps/'));
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+        saveLocalData('cached_waste_points', json.encode(data));
         return data.map((item) => WastePoint.fromJson(item)).toList();
       }
     } catch (e) {
-      // fallback silencioso
+      // Fallback a caché local
+      try {
+        final jsonStr = getLocalData('cached_waste_points');
+        if (jsonStr != null && jsonStr.isNotEmpty) {
+          final List<dynamic> data = json.decode(jsonStr);
+          return data.map((item) => WastePoint.fromJson(item)).toList();
+        }
+      } catch (_) {}
     }
     return [];
   }
@@ -228,6 +294,7 @@ class DjangoAlertService implements EcoAlertService {
       final response = await http.get(Uri.parse('${baseApiUrl}collector-route/'));
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+        saveLocalData('cached_collector_route', json.encode(data));
         return data.map((item) {
           return LatLng(
             (item['latitude'] as num).toDouble(),
@@ -236,7 +303,19 @@ class DjangoAlertService implements EcoAlertService {
         }).toList();
       }
     } catch (e) {
-      // fallback silencioso
+      // Fallback a caché local
+      try {
+        final jsonStr = getLocalData('cached_collector_route');
+        if (jsonStr != null && jsonStr.isNotEmpty) {
+          final List<dynamic> data = json.decode(jsonStr);
+          return data.map((item) {
+            return LatLng(
+              (item['latitude'] as num).toDouble(),
+              (item['longitude'] as num).toDouble(),
+            );
+          }).toList();
+        }
+      } catch (_) {}
     }
     return [];
   }
@@ -246,10 +325,18 @@ class DjangoAlertService implements EcoAlertService {
     try {
       final response = await http.get(Uri.parse('${baseApiUrl}site-settings/'));
       if (response.statusCode == 200) {
-        return json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+        final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+        saveLocalData('cached_site_settings', json.encode(data));
+        return data;
       }
     } catch (e) {
-      // fallback silencioso
+      // Fallback a caché local
+      try {
+        final jsonStr = getLocalData('cached_site_settings');
+        if (jsonStr != null && jsonStr.isNotEmpty) {
+          return json.decode(jsonStr) as Map<String, dynamic>;
+        }
+      } catch (_) {}
     }
     return {};
   }

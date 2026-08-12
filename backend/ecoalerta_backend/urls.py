@@ -20,6 +20,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from alerts.views import LoginView, RegisterView, ImageUploadView
+from rest_framework_simplejwt.views import TokenRefreshView
 
 import os
 
@@ -36,8 +37,10 @@ urlpatterns = [
     path(ADMIN_PATH, admin.site.urls),
     path("api/auth/login/", LoginView.as_view(), name="token_login"),
     path("api/auth/register/", RegisterView.as_view(), name="token_register"),
+    path("api/auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/upload/", ImageUploadView.as_view(), name="image_upload"),
     path("api/", include("alerts.urls")),
     re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
 ]
+
 
