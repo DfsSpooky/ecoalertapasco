@@ -1,0 +1,114 @@
+name: EcoAlerta CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================================
+  # 1. CI BACKEND (Python / Django)
+  # ============================================================================
+  backend-ci:
+    name: Backend Tests & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Instalar dependencias del Backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Verificar configuración de Django
+        env:
+          DEBUG: "True"
+          SECRET_KEY: "ci-secret-key-for-automated-github-tests"
+        run: |
+          cd backend
+          python manage.py check
+
+      - name: Ejecutar pruebas unitarias de Django
+        env:
+          DEBUG: "True"
+          SECRET_KEY: "ci-secret-key-for-automated-github-tests"
+        run: |
+          cd backend
+          python manage.py test
+
+  # ============================================================================
+  # 2. CI FRONTEND (Flutter Web)
+  # ============================================================================
+  frontend-ci:
+    name: Flutter Web Build & Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Flutter SDK (Canal Stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Instalar dependencias de Flutter
+        run: flutter pub get
+
+      - name: Análisis estático de código (Linter)
+        run: flutter analyze
+
+      - name: Ejecutar pruebas unitarias de Flutter
+        run: flutter test
+
+      - name: Compilar paquete Flutter Web en modo Release
+        run: |
+          # Si se configuró PROD_BACKEND_URL en GitHub Secrets se inyecta, de lo contrario usa fallback
+          BACKEND_URL="${{ secrets.PROD_BACKEND_URL || 'https://api.ecoalerta.tudominio.com' }}"
+          flutter build web --release --dart-define=BACKEND_URL=$BACKEND_URL
+
+      - name: Guardar artefacto compilado de la Web
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecoalerta-web-release
+          path: build/web/
+          retention-days: 7
+
+  # ============================================================================
+  # 3. CD DESPLIEGUE A PRODUCCIÓN
+  # ============================================================================
+  deploy:
+    name: Deploy to Production
+    needs: [backend-ci, frontend-ci]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Notificar y Disparar Despliegue en Servidor
+        run: |
+          echo "🚀 Pipeline de integración continua aprobado al 100%."
+          
+          # Si configuraste el Webhook de Coolify en GitHub Secrets:
+          if [ -n "${{ secrets.COOLIFY_DEPLOY_WEBHOOK_URL }}" ]; then
+            echo "📡 Disparando despliegue automático en Coolify..."
+            curl -f -X GET "${{ secrets.COOLIFY_DEPLOY_WEBHOOK_URL }}"
+            echo "✅ Señal de despliegue enviada exitosamente a Coolify."
+          else
+            echo "ℹ️ COOLIFY_DEPLOY_WEBHOOK_URL no configurado aún en GitHub Secrets."
+            echo "ℹ️ Una vez añadido en Settings > Secrets, el despliegue será 100% automático."
+          fi

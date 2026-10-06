@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="EcoAlerta - Plataforma ciudadana para el monitoreo y reporte de incidentes ecológicos en Cerro de Pasco, Perú.">
+
+  <!-- Apple & PWA Meta Tags -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="EcoAlerta">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFFFFF">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
+
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>EcoAlerta — Cerro de Pasco</title>
+  <link rel="manifest" href="manifest.json">
+
+  <style>
+    :root {
+      --bg-color: #000000;
+      --text-primary: #F5F5F7;
+      --text-secondary: #86868B;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg-color: #FFFFFF;
+        --text-primary: #1D1D1F;
+        --text-secondary: #86868B;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background-color: var(--bg-color);
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    }
+
+    #apple-loader {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      background-color: var(--bg-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 999999;
+      transition: opacity 0.35s ease;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    #apple-loader.fade-out {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .loader-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+
+    /* Minimalist Apple-style Glyph */
+    .brand-icon {
+      width: 38px;
+      height: 38px;
+      color: var(--text-primary);
+      margin-bottom: 16px;
+    }
+
+    .brand-title {
+      font-size: 21px;
+      font-weight: 600;
+      letter-spacing: -0.022em;
+      color: var(--text-primary);
+      line-height: 1.2;
+    }
+
+    .brand-subtitle {
+      font-size: 13px;
+      font-weight: 400;
+      letter-spacing: -0.005em;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    /* Authentic iOS Activity Indicator */
+    .ios-spinner {
+      position: relative;
+      width: 20px;
+      height: 20px;
+      margin-top: 36px;
+    }
+
+    .ios-spinner div {
+      position: absolute;
+      left: 9px;
+      top: 0;
+      width: 2px;
+      height: 5px;
+      background-color: var(--text-secondary);
+      border-radius: 1px;
+      transform-origin: 1px 10px;
+      animation: ios-fade 1s linear infinite;
+    }
+
+    .ios-spinner div:nth-child(1)  { transform: rotate(0deg);   animation-delay: -1.0s; }
+    .ios-spinner div:nth-child(2)  { transform: rotate(30deg);  animation-delay: -0.916s; }
+    .ios-spinner div:nth-child(3)  { transform: rotate(60deg);  animation-delay: -0.833s; }
+    .ios-spinner div:nth-child(4)  { transform: rotate(90deg);  animation-delay: -0.75s; }
+    .ios-spinner div:nth-child(5)  { transform: rotate(120deg); animation-delay: -0.666s; }
+    .ios-spinner div:nth-child(6)  { transform: rotate(150deg); animation-delay: -0.583s; }
+    .ios-spinner div:nth-child(7)  { transform: rotate(180deg); animation-delay: -0.5s; }
+    .ios-spinner div:nth-child(8)  { transform: rotate(210deg); animation-delay: -0.416s; }
+    .ios-spinner div:nth-child(9)  { transform: rotate(240deg); animation-delay: -0.333s; }
+    .ios-spinner div:nth-child(10) { transform: rotate(270deg); animation-delay: -0.25s; }
+    .ios-spinner div:nth-child(11) { transform: rotate(300deg); animation-delay: -0.166s; }
+    .ios-spinner div:nth-child(12) { transform: rotate(330deg); animation-delay: -0.083s; }
+
+    @keyframes ios-fade {
+      0%   { opacity: 1; }
+      100% { opacity: 0.15; }
+    }
+  </style>
+</head>
+<body>
+  <div id="apple-loader">
+    <div class="loader-container">
+      <!-- Minimalist single-stroke leaf / eco symbol -->
+      <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/>
+        <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/>
+      </svg>
+      <h1 class="brand-title">EcoAlerta</h1>
+      <p class="brand-subtitle">Cerro de Pasco</p>
+      
+      <!-- Native Apple iOS 12-segment spinner -->
+      <div class="ios-spinner">
+        <div></div><div></div><div></div><div></div>
+        <div></div><div></div><div></div><div></div>
+        <div></div><div></div><div></div><div></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function dismissAppleLoader() {
+      const loader = document.getElementById('apple-loader');
+      if (loader && !loader.classList.contains('fade-out')) {
+        loader.classList.add('fade-out');
+        setTimeout(function() {
+          if (loader.parentNode) loader.parentNode.removeChild(loader);
+        }, 400);
+      }
+    }
+
+    // Ocultar tan pronto como Flutter pinte su primer cuadro
+    window.addEventListener('flutter-first-frame', dismissAppleLoader);
+
+    // O cuando se detecte la inserción de la vista en el DOM
+    const observer = new MutationObserver(function(mutations, obs) {
+      if (document.querySelector('flutter-view') || document.querySelector('flt-glass-pane')) {
+        setTimeout(dismissAppleLoader, 200);
+        obs.disconnect();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // Fallback de seguridad
+    setTimeout(dismissAppleLoader, 7000);
+  </script>
+
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

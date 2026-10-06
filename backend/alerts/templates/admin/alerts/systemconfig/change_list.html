@@ -1,0 +1,436 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls static %}
+
+{% block content %}
+<div style="margin-bottom: 24px;">
+  <!-- TARJETA PRINCIPAL DEL CENTRO DE CONTROL GEMINI (DISEÑO ENTERPRISE SEMIREDONDEADO) -->
+  <div style="background: #ffffff; border-radius: 8px; border: 1px solid #cbd5e1; box-shadow: 0 1px 3px rgba(15,23,42,0.06); padding: 22px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a;">
+    
+    <!-- Encabezado con Insignias Elegantes -->
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 14px; border-bottom: 1px solid #e2e8f0; padding-bottom: 16px; margin-bottom: 20px;">
+      <div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <h2 style="margin: 0; font-size: 18px; font-weight: 700; color: #0f172a; letter-spacing: -0.01em;">
+            Centro de Configuración y Detección de Google Gemini AI
+          </h2>
+        </div>
+        <p style="margin: 5px 0 0 0; font-size: 13px; color: #64748b; line-height: 1.4;">
+          Autodescubrimiento de modelos oficiales de Google AI Studio, validación de cuota y peritaje ambiental para Cerro de Pasco.
+        </p>
+      </div>
+
+        {% if gemini_enabled %}
+          <div style="background: #ecfdf5; border: 1px solid #6ee7b7; color: #065f46; padding: 4px 10px; border-radius: 5px; font-size: 11.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px;">
+            <span style="color: #10b981;">●</span> IA: <b>ACTIVADA (Auto-análisis)</b>
+          </div>
+        {% else %}
+          <div style="background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; padding: 4px 10px; border-radius: 5px; font-size: 11.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px;">
+            <span style="color: #ef4444;">○</span> IA: <b>DESACTIVADA (Modo Manual)</b>
+          </div>
+        {% endif %}
+
+        {% if has_gemini_key %}
+          <div style="background: #f0fdf4; border: 1px solid #86efac; color: #166534; padding: 4px 10px; border-radius: 5px; font-size: 11.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px;">
+            <span>●</span> Clave Activa: <code style="background: #dcfce7; padding: 1px 5px; border-radius: 3px; font-size: 11px; font-family: ui-monospace, monospace;">{{ masked_gemini_key }}</code>
+          </div>
+        {% else %}
+          <div style="background: #fffbeb; border: 1px solid #fde68a; color: #92400e; padding: 4px 10px; border-radius: 5px; font-size: 11.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px;">
+            <span>▲</span> Sin Clave Configurada
+          </div>
+        {% endif %}
+
+        <div style="background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 4px 10px; border-radius: 5px; font-size: 11.5px; font-weight: 600;" id="badge_active_model">
+          Modelo: <b>{{ current_gemini_model }}</b>
+        </div>
+      </div>
+    </div>
+
+    <!-- Formulario Unificado -->
+    <form method="POST" action="" id="gemini-config-form">
+      {% csrf_token %}
+      <input type="hidden" name="action_type" value="save_gemini_config">
+
+      <!-- 0. INTERRUPTOR DE ACTIVACIÓN GENERAL DE GEMINI AI -->
+      <div style="margin-bottom: 22px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+          <div>
+            <label style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #334155;">
+              0. Estado de Activación de Gemini AI en el Sistema:
+            </label>
+            <p style="margin: 3px 0 0 0; font-size: 12px; color: #64748b;">
+              Controla si el reporte ciudadano analiza automáticamente fotos con IA o funciona en modo manual 100%.
+            </p>
+          </div>
+          <span style="font-size: 11px; font-weight: 600; color: {% if gemini_enabled %}#16a34a{% else %}#dc2626{% endif %}; background: {% if gemini_enabled %}#f0fdf4{% else %}#fef2f2{% endif %}; border: 1px solid {% if gemini_enabled %}#86efac{% else %}#fca5a5{% endif %}; padding: 3px 8px; border-radius: 4px;">
+            {% if gemini_enabled %}Actualmente Operativo{% else %}Actualmente en Modo Manual{% endif %}
+          </span>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-top: 10px;">
+          <!-- Opción Activado -->
+          <label style="display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 6px; border: 1px solid {% if gemini_enabled %}#10b981{% else %}#cbd5e1{% endif %}; background: {% if gemini_enabled %}#ffffff{% else %}#f1f5f9{% endif %}; cursor: pointer; box-shadow: {% if gemini_enabled %}0 0 0 1px #10b981{% else %}none{% endif %};">
+            <input type="radio" name="gemini_enabled" value="true" {% if gemini_enabled %}checked{% endif %} {% if not is_superuser %}disabled{% endif %} style="margin-top: 3px; accent-color: #10b981;">
+            <div>
+              <div style="font-size: 12.5px; font-weight: 700; color: #0f172a; display: flex; align-items: center; gap: 5px;">
+                <span>🟢</span> Activado (Auto-análisis con Gemini)
+              </div>
+              <div style="font-size: 11px; color: #64748b; margin-top: 3px; line-height: 1.35;">
+                Al subir una foto se analiza al instante con Gemini: valida que sea contaminación, detecta severidad y autocompleta título/descripción.
+              </div>
+            </div>
+          </label>
+
+          <!-- Opción Desactivado -->
+          <label style="display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 6px; border: 1px solid {% if not gemini_enabled %}#ef4444{% else %}#cbd5e1{% endif %}; background: {% if not gemini_enabled %}#ffffff{% else %}#f1f5f9{% endif %}; cursor: pointer; box-shadow: {% if not gemini_enabled %}0 0 0 1px #ef4444{% else %}none{% endif %};">
+            <input type="radio" name="gemini_enabled" value="false" {% if not gemini_enabled %}checked{% endif %} {% if not is_superuser %}disabled{% endif %} style="margin-top: 3px; accent-color: #ef4444;">
+            <div>
+              <div style="font-size: 12.5px; font-weight: 700; color: #0f172a; display: flex; align-items: center; gap: 5px;">
+                <span>⚪</span> Desactivado (Modo 100% Manual)
+              </div>
+              <div style="font-size: 11px; color: #64748b; margin-top: 3px; line-height: 1.35;">
+                Úsalo en caso de saturación, fallas de API o límites de cuota. El usuario registra manualmente todos los campos y sube hasta 2 fotos sin IA.
+              </div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- 1. CLAVE DE API DE GOOGLE AI STUDIO -->
+      <div style="margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <label style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #475569;">
+            1. Clave de API de Google Gemini (Gratuita de Google AI Studio):
+          </label>
+          <a href="https://aistudio.google.com/apikey" target="_blank" style="font-size: 11.5px; color: #0288d1; text-decoration: none; font-weight: 600;">
+            Obtener clave en Google AI Studio &rarr;
+          </a>
+        </div>
+
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <div style="position: relative; flex: 1;">
+            <input 
+              type="password" 
+              name="gemini_api_key" 
+              id="input_gemini_api_key"
+              value="" 
+              placeholder="{% if has_gemini_key %}•••••••••••••••• (Clave activa en el servidor - Dejar en blanco para mantener){% else %}Pega aquí tu API Key (ejemplo: AIzaSy...){% endif %}" 
+              {% if not is_superuser %}disabled{% endif %}
+              style="width: 100%; box-sizing: border-box; padding: 9px 40px 9px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; outline: none; background: {% if not is_superuser %}#f8fafc{% else %}#ffffff{% endif %}; color: #0f172a; transition: border-color 0.2s ease;"
+              onfocus="this.style.borderColor='#0288d1'"
+              onblur="this.style.borderColor='#cbd5e1'"
+            >
+            {% if is_superuser %}
+            <button 
+              type="button" 
+              id="btn_toggle_visibility" 
+              onclick="toggleApiKeyVisibility()" 
+              title="Mostrar / Ocultar clave ingresada"
+              style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; font-size: 15px; color: #64748b; padding: 4px;"
+            >
+              👁️
+            </button>
+            {% endif %}
+          </div>
+        </div>
+        <p style="margin: 5px 0 0 0; font-size: 11px; color: #64748b;">
+          {% if has_gemini_key %}
+            🔒 <b>Clave protegida en el servidor:</b> La clave real nunca se expone en el navegador. Haz clic en <b>"Realizar Handshake"</b> para diagnosticar sin revelar tu secreto.
+          {% else %}
+            Ingresa tu clave de Google AI Studio y haz clic en <b>"Realizar Handshake y Detectar Modelos"</b> para verificar la conexión.
+          {% endif %}
+        </p>
+      </div>
+
+      <!-- 2. SELECTOR DE MODELO CON TARJETAS SEMIREDONDEADAS ELEGANTES -->
+      <div style="margin-bottom: 22px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <label style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #475569;">
+            2. Modelo de IA a utilizar:
+          </label>
+          <span style="font-size: 11px; color: #0288d1; font-weight: 600;" id="models_status_note">
+            Se verifica automáticamente con el Handshake
+          </span>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px;" id="model-cards-container">
+          {% for m in available_gemini_models %}
+            <label class="model-choice-card" style="display: block; border: 1px solid {% if m.id == current_gemini_model %}#0288d1{% else %}#e2e8f0{% endif %}; background: {% if m.id == current_gemini_model %}#f8fbff{% else %}#ffffff{% endif %}; border-radius: 6px; padding: 12px 14px; cursor: pointer; transition: all 0.15s ease; box-shadow: {% if m.id == current_gemini_model %}0 0 0 1px #0288d1{% else %}none{% endif %};">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <input type="radio" name="gemini_model" value="{{ m.id }}" {% if m.id == current_gemini_model %}checked{% endif %} {% if not is_superuser %}disabled{% endif %} style="cursor: pointer; width: 15px; height: 15px; accent-color: #0288d1; margin: 0;">
+                  <span style="font-weight: 600; font-size: 13.5px; color: #0f172a;">{{ m.name }}</span>
+                </div>
+                {% if m.badge %}
+                  <span class="custom-model-badge" style="background: #f0f7ff; color: #0369a1; border: 1px solid #bfdbfe; font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 4px; letter-spacing: 0.01em;">
+                    {{ m.badge }}
+                  </span>
+                {% endif %}
+              </div>
+              <p style="margin: 0; font-size: 11.5px; color: #64748b; line-height: 1.4; padding-left: 23px;">
+                {{ m.description }}
+              </p>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- 3. BOTONES DE ACCIÓN (ESTILO ENTERPRISE SEMIREDONDEADO) -->
+      <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding-top: 4px;">
+        <button 
+          type="button" 
+          id="btn_do_handshake"
+          onclick="runGeminiHandshake()"
+          style="background: #0288d1; color: #ffffff; border: 1px solid #0277bd; padding: 9px 18px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; box-shadow: 0 1px 2px rgba(2,136,209,0.2); transition: background 0.15s ease;"
+          onmouseover="this.style.background='#0277bd'"
+          onmouseout="this.style.background='#0288d1'"
+        >
+          <span>🤝</span> Realizar Handshake y Detectar Modelos
+        </button>
+
+        {% if is_superuser %}
+        <button 
+          type="submit" 
+          style="background: #ffffff; color: #15803d; border: 1px solid #86efac; padding: 9px 18px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; transition: all 0.15s ease;"
+          onmouseover="this.style.background='#f0fdf4'; this.style.borderColor='#16a34a';"
+          onmouseout="this.style.background='#ffffff'; this.style.borderColor='#86efac';"
+        >
+          <span>💾</span> Guardar Configuración Seleccionada
+        </button>
+        {% else %}
+        <span style="background: #f8fafc; border: 1px solid #e2e8f0; color: #64748b; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;">
+          🔒 Modo Lectura (Solo Superadministradores pueden guardar cambios)
+        </span>
+        {% endif %}
+
+        <span id="handshake_spinner" style="display: none; font-size: 12.5px; color: #0288d1; font-weight: 600;">
+          ⏳ Consultando Google Generative Language API y detectando modelos...
+        </span>
+      </div>
+    </form>
+
+    <!-- 4. CONTENEDOR DE RESULTADO DEL HANDSHAKE (SEMIREDONDEADO) -->
+    <div id="handshake_result_box" style="display: none; margin-top: 16px;"></div>
+
+  </div>
+</div>
+
+<script>
+function toggleApiKeyVisibility() {
+  const input = document.getElementById('input_gemini_api_key');
+  const btn = document.getElementById('btn_toggle_visibility');
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = '🙈';
+  } else {
+    input.type = 'password';
+    btn.textContent = '👁️';
+  }
+}
+
+function attachModelCardListeners() {
+  document.querySelectorAll('input[name="gemini_model"]').forEach(radio => {
+    radio.addEventListener('change', function() {
+      document.querySelectorAll('.model-choice-card').forEach(card => {
+        card.style.borderColor = '#e2e8f0';
+        card.style.background = '#ffffff';
+        card.style.boxShadow = 'none';
+      });
+      const parentLabel = this.closest('.model-choice-card');
+      if (parentLabel) {
+        parentLabel.style.borderColor = '#0288d1';
+        parentLabel.style.background = '#f8fbff';
+        parentLabel.style.boxShadow = '0 0 0 1px #0288d1';
+      }
+      const badge = document.getElementById('badge_active_model');
+      if (badge) {
+        badge.innerHTML = `Modelo: <b>${this.value}</b>`;
+      }
+    });
+  });
+}
+
+function attachEnabledListeners() {
+  document.querySelectorAll('input[name="gemini_enabled"]').forEach(radio => {
+    radio.addEventListener('change', function() {
+      document.querySelectorAll('input[name="gemini_enabled"]').forEach(r => {
+        const label = r.closest('label');
+        if (label) {
+          label.style.borderColor = '#cbd5e1';
+          label.style.background = '#f1f5f9';
+          label.style.boxShadow = 'none';
+        }
+      });
+      const parentLabel = this.closest('label');
+      if (parentLabel) {
+        const isTrue = this.value === 'true';
+        parentLabel.style.borderColor = isTrue ? '#10b981' : '#ef4444';
+        parentLabel.style.background = '#ffffff';
+        parentLabel.style.boxShadow = `0 0 0 1px ${isTrue ? '#10b981' : '#ef4444'}`;
+      }
+    });
+  });
+}
+
+// Inicializar listeners
+attachModelCardListeners();
+attachEnabledListeners();
+
+async function runGeminiHandshake() {
+  const resultBox = document.getElementById('handshake_result_box');
+  const spinner = document.getElementById('handshake_spinner');
+  const btn = document.getElementById('btn_do_handshake');
+  const apiKeyInput = document.getElementById('input_gemini_api_key');
+  const selectedModelInput = document.querySelector('input[name="gemini_model"]:checked');
+
+  const apiKey = apiKeyInput ? apiKeyInput.value.trim() : '';
+  const model = selectedModelInput ? selectedModelInput.value : 'gemini-3.8-flash';
+  const hasStoredKey = {% if has_gemini_key %}true{% else %}false{% endif %};
+
+  if (!apiKey && !hasStoredKey) {
+    resultBox.style.display = 'block';
+    resultBox.innerHTML = `
+      <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 12px 14px; color: #92400e; font-size: 12.5px;">
+        ▲ <b>Ingresa tu API Key primero:</b> Pega la clave gratuita obtenida en Google AI Studio en el campo superior antes de realizar el handshake.
+      </div>
+    `;
+    return;
+  }
+
+  spinner.style.display = 'inline-block';
+  btn.disabled = true;
+  btn.style.opacity = '0.7';
+  resultBox.style.display = 'none';
+
+  try {
+    const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    const response = await fetch('ajax-handshake/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': csrftoken,
+      },
+      body: JSON.stringify({
+        api_key: apiKey,
+        model: model,
+      }),
+    });
+
+    const data = await response.json();
+    resultBox.style.display = 'block';
+
+    // 1. RENDERIZAR MODELOS SIEMPRE QUE SE HAYAN DETECTADO EN LA CUENTA
+    if (data.detected_models && data.detected_models.length > 0) {
+      const container = document.getElementById('model-cards-container');
+      const activeChosen = data.tested_model || model;
+      
+      container.innerHTML = data.detected_models.map(m => `
+        <label class="model-choice-card" style="display: block; border: 1px solid ${m.id === activeChosen ? '#0288d1' : '#e2e8f0'}; background: ${m.id === activeChosen ? '#f8fbff' : '#ffffff'}; border-radius: 6px; padding: 12px 14px; cursor: pointer; transition: all 0.15s ease; box-shadow: ${m.id === activeChosen ? '0 0 0 1px #0288d1' : 'none'};">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <input type="radio" name="gemini_model" value="${m.id}" ${m.id === activeChosen ? 'checked' : ''} style="cursor: pointer; width: 15px; height: 15px; accent-color: #0288d1; margin: 0;">
+              <span style="font-weight: 600; font-size: 13.5px; color: #0f172a;">${m.name}</span>
+            </div>
+            ${m.badge ? `<span class="custom-model-badge" style="background: #f0f7ff; color: #0369a1; border: 1px solid #bfdbfe; font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 4px; letter-spacing: 0.01em;">${m.badge}</span>` : ''}
+          </div>
+          <p style="margin: 0; font-size: 11.5px; color: #64748b; line-height: 1.4; padding-left: 23px;">
+            ${m.description || 'Modelo oficial de Google Gemini'}
+          </p>
+        </label>
+      `).join('');
+
+      attachModelCardListeners();
+
+      const statusNote = document.getElementById('models_status_note');
+      if (statusNote) {
+        statusNote.innerHTML = `● ${data.detected_models.length} modelos detectados directamente de Google AI Studio`;
+        statusNote.style.color = '#15803d';
+      }
+
+      const badge = document.getElementById('badge_active_model');
+      if (badge) {
+        badge.innerHTML = `Modelo: <b>${activeChosen}</b>`;
+      }
+    }
+
+    // 2. MOSTRAR TARJETA DE ESTADO CORRESPONDIENTE
+    if (data.is_rate_limited) {
+      resultBox.innerHTML = `
+        <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 14px 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 7px;">
+              <span style="font-weight: 700; color: #92400e; font-size: 13.5px;">✓ Handshake Exitoso: Clave Válida y Modelos Detectados</span>
+            </div>
+            <div style="background: #fef3c7; color: #92400e; border: 1px solid #fde68a; padding: 2px 7px; border-radius: 4px; font-weight: 600; font-size: 11px;">
+              ⏳ Límite RPM Gratuito (15 req/min)
+            </div>
+          </div>
+          <div style="font-size: 12px; color: #78350f; line-height: 1.55;">
+            <div>• <b>Autenticación:</b> Tu clave de API es 100% auténtica y conectada con Google AI Studio.</div>
+            <div>• <b>Modelos Disponibles:</b> Se detectaron y cargaron ${data.detected_models ? data.detected_models.length : 0} modelos en el selector inferior.</div>
+            <div>• <b>Aviso de Cuota:</b> Se alcanzó temporalmente la cuota de peticiones por minuto de la capa gratuita. En unos segundos se renovará automáticamente.</div>
+          </div>
+          <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #fde68a; font-size: 11.5px; color: #92400e; font-weight: 600;">
+            👉 Selecciona tu modelo favorito en la lista de abajo y haz clic en <b>"Guardar Configuración Seleccionada"</b>.
+          </div>
+        </div>
+      `;
+    } else if (response.ok && data.success) {
+      resultBox.innerHTML = `
+        <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 14px 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 7px;">
+              <span style="font-weight: 700; color: #15803d; font-size: 13.5px;">✓ Handshake Exitoso: Conexión Operativa</span>
+            </div>
+            <div style="background: #dcfce7; color: #166534; border: 1px solid #86efac; padding: 2px 7px; border-radius: 4px; font-weight: 600; font-size: 11px;">
+              ⚡ Latencia: ${data.latency_ms} ms
+            </div>
+          </div>
+          <div style="font-size: 12px; color: #166534; line-height: 1.55;">
+            <div>• <b>Modelo Verificado:</b> <code>${data.tested_model || data.model}</code></div>
+            <div>• <b>Modelos Disponibles:</b> ${data.detected_models ? data.detected_models.length : 1} modelos listos en tu cuenta</div>
+            <div>• <b>Cuota:</b> ${data.quota_tier || 'Google AI Studio Free Tier (15 req/min)'}</div>
+            <div>• <b>Capacidades Activas:</b> Peritaje ambiental multimodal, detección de relaves mineros, basurales y calidad de agua en Cerro de Pasco.</div>
+          </div>
+          <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #bbf7d0; font-size: 11.5px; color: #15803d; font-weight: 600;">
+            👉 Selecciona el modelo deseado y haz clic en <b>"Guardar Configuración Seleccionada"</b>.
+          </div>
+        </div>
+      `;
+    } else {
+      resultBox.innerHTML = `
+        <div style="background: #fef2f2; border: 1px solid #fca5a5; border-radius: 6px; padding: 14px 16px;">
+          <div style="display: flex; align-items: center; gap: 7px; margin-bottom: 6px;">
+            <span style="font-weight: 700; color: #991b1b; font-size: 13px;">▲ Error en el Handshake de Diagnóstico</span>
+          </div>
+          <div style="font-size: 12px; color: #b91c1c; line-height: 1.45;">
+            ${data.error || 'No se pudo establecer la conexión con Google Gemini.'}
+            ${data.details ? `<pre style="background: #fee2e2; padding: 6px 8px; border-radius: 4px; font-size: 10.5px; overflow-x: auto; margin-top: 6px;">${data.details}</pre>` : ''}
+          </div>
+        </div>
+      `;
+    }
+  } catch (err) {
+    resultBox.style.display = 'block';
+    resultBox.innerHTML = `
+      <div style="background: #fef2f2; border: 1px solid #fca5a5; border-radius: 6px; padding: 14px 16px; color: #991b1b; font-size: 12.5px;">
+        <b>Error de red al ejecutar el Handshake:</b> ${err.message}
+      </div>
+    `;
+  } finally {
+    spinner.style.display = 'none';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+  }
+}
+</script>
+
+<!-- SECCIÓN COLAPSABLE CON LA TABLA TÉCNICA (OPCIONAL) -->
+<details style="margin-top: 20px; border-top: 1px dashed #cbd5e1; padding-top: 12px;">
+  <summary style="cursor: pointer; font-size: 11.5px; color: #64748b; font-weight: 600; outline: none;">
+    🔧 Ver registros técnicos en base de datos (Vista avanzada de tabla)
+  </summary>
+  <div style="margin-top: 12px;">
+    {{ block.super }}
+  </div>
+</details>
+{% endblock %}
