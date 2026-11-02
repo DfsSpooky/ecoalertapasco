@@ -168,17 +168,21 @@ pub fn ReportDialog(
         }
     };
 
-    // Automatically perform reverse geocoding when dialog opens or center changes
+    // Synchronize modal state to JS to avoid Leaflet map events during report creation & reverse geocode once
     create_effect(move |_| {
-        if show_new_report_dialog.get() {
-            let (lat, lng) = report_center.get();
-            is_geocoding.set(true);
-            spawn_local(async move {
-                let (addr_str, dist) = reverse_geocode(lat, lng).await;
-                address.set(addr_str);
-                district.set(dist);
-                is_geocoding.set(false);
-            });
+        let is_open = show_new_report_dialog.get();
+        let _ = js_sys::eval(&format!("window.isReportModalOpen = {};", is_open));
+        if is_open {
+            let (lat, lng) = report_center.get_untracked();
+            if address.get_untracked().trim().is_empty() {
+                is_geocoding.set(true);
+                spawn_local(async move {
+                    let (addr_str, dist) = reverse_geocode(lat, lng).await;
+                    address.set(addr_str);
+                    district.set(dist);
+                    is_geocoding.set(false);
+                });
+            }
         }
     });
 
@@ -447,11 +451,6 @@ pub fn ReportDialog(
 
     view! {
         {move || show_new_report_dialog.get().then(|| {
-            let (lat, lng) = report_center.get();
-            let cd = cooldown_remaining();
-            let duplicate = nearby_duplicate();
-            let is_duplicate = duplicate.is_some();
-
             view! {
                 <div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50 animate-in fade-in duration-150">
                     <div class="bg-white w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl border-t sm:border border-slate-200/90 p-5 sm:p-6 shadow-[0_-12px_48px_rgba(0,0,0,0.22)] max-h-[92vh] overflow-y-auto space-y-4">
@@ -500,22 +499,23 @@ pub fn ReportDialog(
                         </div>
 
                         // Anti-Spam Cooldown Banner
-                        {move || (cd > 0).then(|| view! {
-                            <div class="p-3 bg-amber-50 rounded-xl border border-amber-200 flex items-start space-x-2.5">
-                                <svg class="w-4 h-4 text-amber-600 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <circle cx="12" cy="12" r="10"></circle>
-                                    <polyline points="12 6 12 12 16 14"></polyline>
-                                </svg>
-                                <p class="text-[11px] text-amber-800 leading-snug font-medium">
-                                    {format!("Enfriamiento anti-spam activo: Espera {} segundos antes de enviar otro reporte ambiental.", cd)}
-                                </p>
-                            </div>
-                        })}
+                        {move || {
+                            let cd = cooldown_remaining();
+                            (cd > 0).then(|| view! {
+                                <div class="p-3 bg-amber-50 rounded-xl border border-amber-200 flex items-start space-x-2.5">
+                                    <svg class="w-4 h-4 text-amber-600 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10"></circle>
+                                        <polyline points="12 6 12 12 16 14"></polyline>
+                                    </svg>
+                                    <p class="text-[11px] text-amber-800 leading-snug font-medium">
+                                        {format!("Enfriamiento anti-spam activo: Espera {} segundos antes de enviar otro reporte ambiental.", cd)}
+                                    </p>
+                                </div>
+                            })
+                        }}
 
                         // Duplicate Warning Banner
-                        {
-                            let dup = duplicate.clone();
-                            move || dup.as_ref().map(|(dup_alert, meters)| view! {
+                        {move || nearby_duplicate().map(|(dup_alert, meters)| view! {
                             <div class="p-3 bg-red-50 rounded-xl border border-red-200 flex items-start space-x-2.5">
                                 <svg class="w-4 h-4 text-red-600 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
@@ -816,7 +816,12 @@ pub fn ReportDialog(
                             <div class="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-2">
                                 <div class="flex items-center justify-between text-[11px]">
                                     <span class="font-bold text-slate-400 uppercase tracking-wider text-[10px]">"Ubicación en el Mapa"</span>
-                                    <span class="font-mono text-slate-700 font-medium">{format!("{:.4}, {:.4}", lat, lng)}</span>
+                                    <span class="font-mono text-slate-700 font-medium">
+                                        {move || {
+                                            let (clat, clng) = report_center.get();
+                                            format!("{:.4}, {:.4}", clat, clng)
+                                        }}
+                                    </span>
                                 </div>
                                 <div class="flex items-center space-x-2">
                                     <button
@@ -971,7 +976,11 @@ pub fn ReportDialog(
                                         "px-4 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white rounded-xl shadow-xs transition flex items-center space-x-1.5"
                                     }
                                 }
-                                disabled=move || is_submitting.get() || (cd > 0) || is_duplicate || is_blocked_by_ai.get() || is_analyzing_ai.get()
+                                disabled=move || {
+                                    let cd = cooldown_remaining();
+                                    let is_dup = nearby_duplicate().is_some();
+                                    is_submitting.get() || (cd > 0) || is_dup || is_blocked_by_ai.get() || is_analyzing_ai.get()
+                                }
                                 on:click=submit_report
                             >
                                 {move || if is_submitting.get() {
@@ -992,7 +1001,8 @@ pub fn ReportDialog(
                                         </svg>
                                         <span>"Bloqueado: No es Ambiental"</span>
                                     }
-                                } else if cd > 0 {
+                                } else if cooldown_remaining() > 0 {
+                                    let cd = cooldown_remaining();
                                     view! {
                                         <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                             <circle cx="12" cy="12" r="10"></circle>
@@ -1000,7 +1010,7 @@ pub fn ReportDialog(
                                         </svg>
                                         <span>{format!("Espera ({}s)", cd)}</span>
                                     }
-                                } else if is_duplicate {
+                                } else if nearby_duplicate().is_some() {
                                     view! {
                                         <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                             <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>

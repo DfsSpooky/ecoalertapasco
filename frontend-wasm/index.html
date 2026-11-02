@@ -497,31 +497,44 @@
         // ResizeObserver para mantener sincronizado el centro geográfico cuando el sidebar colapsa o expande en desktop
         const mapEl = document.getElementById(elementId);
         if (mapEl && window.ResizeObserver) {
+          let roTimeout = null;
           const ro = new ResizeObserver(() => {
-            if (this.map) {
-              this.map.invalidateSize({ animate: false });
-            }
+            if (roTimeout) clearTimeout(roTimeout);
+            roTimeout = setTimeout(() => {
+              if (this.map) {
+                this.map.invalidateSize({ animate: false });
+              }
+            }, 80);
           });
           ro.observe(mapEl);
           this._resizeObserver = ro;
         }
 
+        let resizeTimeout = null;
         window.addEventListener('resize', () => {
-          if (this.map) {
-            this.map.invalidateSize({ animate: false });
-          }
+          if (resizeTimeout) clearTimeout(resizeTimeout);
+          resizeTimeout = setTimeout(() => {
+            if (this.map) {
+              this.map.invalidateSize({ animate: false });
+            }
+          }, 80);
         });
 
+        let centerDebounce = null;
         this.map.on('move', () => {
-          const center = this.map.getCenter();
-          if (window.onMapCenterChanged) {
-            window.onMapCenterChanged(center.lat, center.lng);
-          }
+          if (!window.isReportMode || window.isReportModalOpen) return;
+          if (centerDebounce) clearTimeout(centerDebounce);
+          centerDebounce = setTimeout(() => {
+            if (window.isReportMode && !window.isReportModalOpen && window.onMapCenterChanged && this.map) {
+              const center = this.map.getCenter();
+              window.onMapCenterChanged(center.lat, center.lng);
+            }
+          }, 50);
         });
 
         // Permitir hacer clic directo en el mapa para ubicar el reporte exactamente donde el usuario señale
         this.map.on('click', (e) => {
-          if (window.isReportMode) {
+          if (window.isReportMode && !window.isReportModalOpen) {
             this.map.flyTo([e.latlng.lat, e.latlng.lng], Math.max(this.map.getZoom(), 15), { duration: 0.4 });
             if (window.onMapCenterChanged) {
               window.onMapCenterChanged(e.latlng.lat, e.latlng.lng);

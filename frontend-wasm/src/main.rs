@@ -293,9 +293,16 @@ fn App() -> impl IntoView {
                     WsServerMessage::AlertUpserted { alert: incoming } => {
                         let is_new = alerts.with_untracked(|list| !list.iter().any(|a| a.id == incoming.id));
                         if is_new {
+                            let is_own = current_user.with_untracked(|u| {
+                                u.as_ref().map(|cur| {
+                                    incoming.reporter_name.as_deref() == Some(&cur.username)
+                                        || incoming.reporter_name.as_deref() == cur.full_name.as_deref()
+                                }).unwrap_or(false)
+                            });
                             if has_completed_initial_sync.get_untracked()
                                 && incoming.severity == EcoSeverity::Critico
                                 && incoming.status == "pending"
+                                && !is_own
                             {
                                 active_emergency_alert.set(Some(incoming.clone()));
                                 if let (Ok(t_json), Ok(d_json)) = (
@@ -788,6 +795,7 @@ fn App() -> impl IntoView {
                             show_auth_dialog.set(true);
                         } else if is_report_mode.get() {
                             // Si ya está ubicando en el mapa interactivo, confirma y abre el modal
+                            show_mobile_report_options.set(false);
                             show_new_report_dialog.set(true);
                         } else {
                             // En móvil: muestra las opciones claras de ubicación (Mapa o GPS)
