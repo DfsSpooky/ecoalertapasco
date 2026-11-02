@@ -9,6 +9,32 @@ const KEY_EMAIL: &str = "eco_auth_email";
 const KEY_PHOTO_URL: &str = "eco_auth_photo_url";
 const KEY_FULL_NAME: &str = "eco_auth_full_name";
 const KEY_LAST_REPORT_TS: &str = "eco_last_report_ts";
+const KEY_REMEMBERED_GOOGLE_USER: &str = "eco_remembered_google_user";
+
+pub fn save_remembered_google_user(user: &AuthUser) {
+    if let Some(win) = window() {
+        if let Ok(Some(storage)) = win.local_storage() {
+            if let Ok(serialized) = serde_json::to_string(user) {
+                let _ = storage.set_item(KEY_REMEMBERED_GOOGLE_USER, &serialized);
+            }
+        }
+    }
+}
+
+pub fn load_remembered_google_user() -> Option<AuthUser> {
+    let win = window()?;
+    let storage = win.local_storage().ok()??;
+    let data_str = storage.get_item(KEY_REMEMBERED_GOOGLE_USER).ok()??;
+    serde_json::from_str::<AuthUser>(&data_str).ok()
+}
+
+pub fn clear_remembered_google_user() {
+    if let Some(win) = window() {
+        if let Ok(Some(storage)) = win.local_storage() {
+            let _ = storage.remove_item(KEY_REMEMBERED_GOOGLE_USER);
+        }
+    }
+}
 
 pub fn save_auth_session(user: &AuthUser) {
     if let Some(win) = window() {
@@ -26,6 +52,10 @@ pub fn save_auth_session(user: &AuthUser) {
                 let _ = storage.set_item(KEY_FULL_NAME, full_name);
             }
         }
+    }
+    // Remember Google / citizen user details for fast one-click re-login
+    if user.email.is_some() || user.photo_url.is_some() || !user.is_staff {
+        save_remembered_google_user(user);
     }
 }
 

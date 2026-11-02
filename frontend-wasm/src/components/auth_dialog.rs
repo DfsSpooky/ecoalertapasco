@@ -1,7 +1,7 @@
 use leptos::*;
-use crate::api::{login_url, google_auth_url, google_auth_config_url};
+use crate::api::{login_url, google_auth_url, google_auth_config_url, profile_url};
 use crate::models::{AuthUser, LoginPayload, GoogleAuthPayload, GoogleAuthConfig};
-use crate::storage::save_auth_session;
+use crate::storage::{save_auth_session, load_remembered_google_user, clear_remembered_google_user};
 
 #[component]
 pub fn AuthDialog(
@@ -21,10 +21,16 @@ pub fn AuthDialog(
     // Google Auth State
     let google_config = create_rw_signal(None::<GoogleAuthConfig>);
 
+    // Detected / Remembered Google Account
+    let remembered_user = create_rw_signal(load_remembered_google_user());
+    let switch_to_other_account = create_rw_signal(false);
+
     // Fetch Google configuration when dialog is opened
     create_effect(move |_| {
         if show_dialog.get() {
             error_message.set(None);
+            remembered_user.set(load_remembered_google_user());
+            switch_to_other_account.set(false);
             spawn_local(async move {
                 let req = gloo_net::http::Request::get(&google_auth_config_url()).send().await;
                 if let Ok(resp) = req {
@@ -88,6 +94,7 @@ pub fn AuthDialog(
                             if resp.ok() {
                                 if let Ok(user) = resp.json::<AuthUser>().await {
                                     save_auth_session(&user);
+                                    remembered_user.set(Some(user.clone()));
                                     current_user.set(Some(user));
                                     show_dialog.set(false);
                                 } else {
@@ -186,10 +193,73 @@ pub fn AuthDialog(
         });
     };
 
+    let login_with_detected = {
+        let current_user = current_user.clone();
+        let show_dialog = show_dialog.clone();
+        let is_submitting = is_submitting.clone();
+        let error_message = error_message.clone();
+        let remembered_user = remembered_user.clone();
+
+        move |_| {
+            if let Some(user) = remembered_user.get_untracked() {
+                is_submitting.set(true);
+                error_message.set(None);
+
+                let current_user = current_user.clone();
+                let show_dialog = show_dialog.clone();
+                let is_submitting = is_submitting.clone();
+                let _error_message = error_message.clone();
+                let saved_user = user.clone();
+
+                spawn_local(async move {
+                    let req = gloo_net::http::Request::get(&profile_url())
+                        .header("Authorization", &format!("Token {}", saved_user.token))
+                        .send()
+                        .await;
+
+                    if let Ok(resp) = req {
+                        if resp.ok() {
+                            save_auth_session(&saved_user);
+                            current_user.set(Some(saved_user));
+                            is_submitting.set(false);
+                            show_dialog.set(false);
+                            return;
+                        }
+                    }
+
+                    is_submitting.set(false);
+                    let _ = js_sys::eval("window.ecoGoogleAuth.prompt()");
+                });
+            }
+        }
+    };
+
+    let handle_use_other_account = {
+        let switch_to_other_account = switch_to_other_account.clone();
+        move |_| {
+            switch_to_other_account.set(true);
+            let _ = js_sys::eval("setTimeout(function() { if (window.ecoGoogleAuth) { window.ecoGoogleAuth.renderButton('google-gis-btn-container'); window.ecoGoogleAuth.prompt(); } }, 60)");
+        }
+    };
+
+    let handle_forget_account = {
+        let remembered_user = remembered_user.clone();
+        let switch_to_other_account = switch_to_other_account.clone();
+        move |_| {
+            clear_remembered_google_user();
+            remembered_user.set(None);
+            switch_to_other_account.set(true);
+            let _ = js_sys::eval("setTimeout(function() { if (window.ecoGoogleAuth) window.ecoGoogleAuth.renderButton('google-gis-btn-container'); }, 60)");
+        }
+    };
+
     view! {
         {move || show_dialog.get().then(|| {
             let is_usuarios = move || active_tab.get() == "usuarios";
             let google_login_fn = perform_google_login.clone();
+            let login_detected_fn = login_with_detected.clone();
+            let use_other_fn = handle_use_other_account.clone();
+            let forget_fn = handle_forget_account.clone();
 
             view! {
                 <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50 animate-in fade-in duration-150">
@@ -297,65 +367,176 @@ pub fn AuthDialog(
 
                             // ==================== PANEL 1: USUARIOS (EXCLUSIVO GOOGLE) ====================
                             <div class=move || if is_usuarios() { "space-y-4 pt-1 animate-in fade-in duration-150" } else { "hidden" }>
-                                <div class="p-4 rounded-2xl bg-gradient-to-br from-emerald-50/80 to-teal-50/40 border border-emerald-200/80 space-y-3 shadow-2xs">
-                                    <div class="flex items-start space-x-2.5">
-                                        <div class="w-7 h-7 rounded-lg bg-emerald-600/10 text-emerald-700 flex items-center justify-center shrink-0 mt-0.5">
-                                            <svg class="w-4 h-4 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-                                            </svg>
-                                        </div>
-                                        <div>
-                                            <h3 class="text-xs font-bold text-emerald-950">"Acceso Ciudadano"</h3>
-                                            <p class="text-[11px] text-emerald-800 leading-relaxed mt-0.5">
-                                                "Inicia sesión o regístrate en un clic con tu cuenta de Google para reportar y seguir alertas ambientales."
-                                            </p>
-                                        </div>
-                                    </div>
+                                {move || {
+                                    let has_remembered = remembered_user.get().is_some() && !switch_to_other_account.get();
+                                    if has_remembered {
+                                        let rem_user = remembered_user.get().unwrap();
+                                        let first_name = rem_user
+                                            .full_name
+                                            .as_deref()
+                                            .unwrap_or(&rem_user.username)
+                                            .split_whitespace()
+                                            .next()
+                                            .unwrap_or("Usuario")
+                                            .to_string();
 
-                                    // Official GIS native button container (rendered if Client ID is configured)
-                                    <div id="google-gis-btn-container" class="w-full flex justify-center empty:hidden min-h-[42px]"></div>
+                                        let login_fn = login_detected_fn.clone();
+                                        let other_fn = use_other_fn.clone();
+                                        let forget_fn = forget_fn.clone();
 
-                                    // Fallback button shown only if Google GIS is loading or needs prompt
-                                    <button
-                                        type="button"
-                                        class=move || {
-                                            let has_cid = google_config
-                                                .get()
-                                                .map(|c| !c.client_id.trim().is_empty())
-                                                .unwrap_or(false);
-                                            if has_cid {
-                                                "hidden"
-                                            } else {
-                                                "w-full py-2.5 px-4 rounded-xl font-medium text-xs text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 hover:border-slate-400 shadow-xs flex items-center justify-center space-x-3 transition cursor-pointer active:scale-[0.99] disabled:opacity-50"
-                                            }
-                                        }
-                                        disabled=move || is_submitting.get()
-                                        on:click=move |_| {
-                                            let has_cid = google_config
-                                                .get()
-                                                .map(|c| !c.client_id.trim().is_empty())
-                                                .unwrap_or(false);
+                                        view! {
+                                            <div class="p-4 rounded-2xl bg-gradient-to-br from-emerald-50/90 to-teal-50/50 border border-emerald-200/90 space-y-3.5 shadow-2xs animate-in fade-in">
+                                                <div class="flex items-center space-x-3">
+                                                    {if let Some(ref photo) = rem_user.photo_url {
+                                                        view! {
+                                                            <img src=photo.clone() alt="Foto de perfil" class="w-12 h-12 rounded-full border-2 border-emerald-500 shadow-xs object-cover shrink-0" />
+                                                        }.into_view()
+                                                    } else {
+                                                        view! {
+                                                            <div class="w-12 h-12 rounded-full bg-emerald-600 text-white font-bold text-lg flex items-center justify-center shadow-xs shrink-0">
+                                                                {first_name.chars().next().unwrap_or('U').to_string()}
+                                                            </div>
+                                                        }.into_view()
+                                                    }}
+                                                    <div class="min-w-0 flex-1">
+                                                        <span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                                            <svg class="w-3 h-3 text-emerald-600" viewBox="0 0 24 24" fill="currentColor">
+                                                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                                                            </svg>
+                                                            <span>"Cuenta Detectada"</span>
+                                                        </span>
+                                                        <h4 class="text-xs sm:text-sm font-bold text-slate-900 truncate mt-1">
+                                                            {rem_user.full_name.clone().unwrap_or_else(|| rem_user.username.clone())}
+                                                        </h4>
+                                                        <p class="text-[11px] text-slate-500 truncate">
+                                                            {rem_user.email.clone().unwrap_or_default()}
+                                                        </p>
+                                                    </div>
+                                                </div>
 
-                                            if has_cid {
-                                                let _ = js_sys::eval("window.ecoGoogleAuth.prompt()");
-                                            } else {
-                                                error_message.set(Some(
-                                                    "El servicio de Google se está conectando. Por favor espera un momento o revisa tu conexión.".to_string()
-                                                ));
-                                            }
-                                        }
-                                    >
-                                        <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-2.09-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-                                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-                                        </svg>
-                                        <span class="font-semibold text-slate-800">
-                                            "Continuar con Google"
-                                        </span>
-                                    </button>
-                                </div>
+                                                // Botón principal de Iniciar Sesión con la cuenta detectada
+                                                <button
+                                                    type="button"
+                                                    class="w-full py-3 px-4 rounded-xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] shadow-sm shadow-emerald-600/20 flex items-center justify-center space-x-2 transition cursor-pointer disabled:opacity-50"
+                                                    disabled=move || is_submitting.get()
+                                                    on:click=login_fn
+                                                >
+                                                    {move || if is_submitting.get() {
+                                                        view! {
+                                                            <span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                                                            <span>"Iniciando sesión..."</span>
+                                                        }.into_view()
+                                                    } else {
+                                                        view! {
+                                                            <svg class="w-4 h-4 fill-current shrink-0" viewBox="0 0 24 24">
+                                                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/>
+                                                            </svg>
+                                                            <span>{format!("Iniciar sesión como {}", first_name)}</span>
+                                                        }.into_view()
+                                                    }}
+                                                </button>
+
+                                                // Opciones para cambiar de cuenta o desconectar
+                                                <div class="pt-2 border-t border-emerald-100 flex items-center justify-between text-[11px]">
+                                                    <button
+                                                        type="button"
+                                                        class="text-slate-600 hover:text-emerald-700 font-semibold transition cursor-pointer flex items-center space-x-1"
+                                                        on:click=other_fn
+                                                    >
+                                                        <i class="fa-solid fa-arrows-rotate text-[10px] text-emerald-600"></i>
+                                                        <span>"Usar otra cuenta de Google"</span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        class="text-slate-400 hover:text-rose-600 font-medium transition cursor-pointer"
+                                                        on:click=forget_fn
+                                                    >
+                                                        "Olvidar cuenta"
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        }.into_view()
+                                    } else {
+                                        let switch_back = switch_to_other_account.clone();
+                                        view! {
+                                            <div class="p-4 rounded-2xl bg-gradient-to-br from-emerald-50/80 to-teal-50/40 border border-emerald-200/80 space-y-3 shadow-2xs">
+                                                <div class="flex items-start space-x-2.5">
+                                                    <div class="w-7 h-7 rounded-lg bg-emerald-600/10 text-emerald-700 flex items-center justify-center shrink-0 mt-0.5">
+                                                        <svg class="w-4 h-4 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                                                        </svg>
+                                                    </div>
+                                                    <div>
+                                                        <h3 class="text-xs font-bold text-emerald-950">"Acceso Ciudadano"</h3>
+                                                        <p class="text-[11px] text-emerald-800 leading-relaxed mt-0.5">
+                                                            "Inicia sesión o regístrate en un clic con tu cuenta de Google para reportar y seguir alertas ambientales."
+                                                        </p>
+                                                    </div>
+                                                </div>
+
+                                                // Official GIS native button container (rendered if Client ID is configured)
+                                                <div id="google-gis-btn-container" class="w-full flex justify-center empty:hidden min-h-[42px]"></div>
+
+                                                // Fallback button shown only if Google GIS is loading or needs prompt
+                                                <button
+                                                    type="button"
+                                                    class=move || {
+                                                        let has_cid = google_config
+                                                            .get()
+                                                            .map(|c| !c.client_id.trim().is_empty())
+                                                            .unwrap_or(false);
+                                                        if has_cid {
+                                                            "hidden"
+                                                        } else {
+                                                            "w-full py-2.5 px-4 rounded-xl font-medium text-xs text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 hover:border-slate-400 shadow-xs flex items-center justify-center space-x-3 transition cursor-pointer active:scale-[0.99] disabled:opacity-50"
+                                                        }
+                                                    }
+                                                    disabled=move || is_submitting.get()
+                                                    on:click=move |_| {
+                                                        let has_cid = google_config
+                                                            .get()
+                                                            .map(|c| !c.client_id.trim().is_empty())
+                                                            .unwrap_or(false);
+
+                                                        if has_cid {
+                                                            let _ = js_sys::eval("window.ecoGoogleAuth.prompt()");
+                                                        } else {
+                                                            error_message.set(Some(
+                                                                "El servicio de Google se está conectando. Por favor espera un momento o revisa tu conexión.".to_string()
+                                                            ));
+                                                        }
+                                                    }
+                                                >
+                                                    <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                                                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                                                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                                                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-2.09-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                                                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                                                    </svg>
+                                                    <span class="font-semibold text-slate-800">
+                                                        "Continuar con Google"
+                                                    </span>
+                                                </button>
+
+                                                // Back to detected account link if one exists
+                                                {move || (remembered_user.get().is_some() && switch_to_other_account.get()).then(|| {
+                                                    let switch_back_btn = switch_back.clone();
+                                                    view! {
+                                                        <div class="pt-2 text-center border-t border-emerald-100">
+                                                            <button
+                                                                type="button"
+                                                                class="text-[11px] text-emerald-700 hover:underline font-semibold cursor-pointer"
+                                                                on:click=move |_| switch_back_btn.set(false)
+                                                            >
+                                                                "← Volver a mi cuenta detectada"
+                                                            </button>
+                                                        </div>
+                                                    }
+                                                })}
+                                            </div>
+                                        }.into_view()
+                                    }
+                                }}
                             </div>
 
                             // ==================== PANEL 2: AUTORIDADES ====================

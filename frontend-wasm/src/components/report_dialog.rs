@@ -202,52 +202,77 @@ pub fn ReportDialog(
         find_nearby_active_alert(&list, lat, lng, cat, 50.0)
     };
 
-    // Upload photo via JS helper
-    let upload_selected_photo = move |_| {
-        if photos.get().len() >= 2 {
-            error_message.set(Some("Límite alcanzado: máximo 2 fotografías por reporte.".to_string()));
-            return;
-        }
+    // Upload photo via JS helper (supports camera vs gallery input)
+    let upload_from_input = {
+        let photos = photos.clone();
+        let error_message = error_message.clone();
+        let is_uploading_photo = is_uploading_photo.clone();
+        let analyze_photo_with_ai = analyze_photo_with_ai.clone();
 
-        is_uploading_photo.set(true);
-        error_message.set(None);
+        move |input_id: &'static str| {
+            if photos.get().len() >= 2 {
+                error_message.set(Some("Límite alcanzado: máximo 2 fotografías por reporte.".to_string()));
+                return;
+            }
 
-        spawn_local(async move {
-            let script = format!("window.ecoUpload.uploadFile('report-photo-input', '{}')", upload_url());
-            match js_sys::eval(&script) {
-                Ok(promise_val) => {
-                    let promise = js_sys::Promise::from(promise_val);
-                    match JsFuture::from(promise).await {
-                        Ok(val) => {
-                            if let Some(url_str) = val.as_string() {
-                                let is_first = photos.get_untracked().is_empty();
-                                photos.update(|p| p.push(url_str.clone()));
-                                if is_first {
-                                    analyze_photo_with_ai(url_str);
+            is_uploading_photo.set(true);
+            error_message.set(None);
+
+            let photos = photos.clone();
+            let error_message = error_message.clone();
+            let is_uploading_photo = is_uploading_photo.clone();
+            let analyze_photo_with_ai = analyze_photo_with_ai.clone();
+
+            spawn_local(async move {
+                let script = format!("window.ecoUpload.uploadFile('{}', '{}')", input_id, upload_url());
+                match js_sys::eval(&script) {
+                    Ok(promise_val) => {
+                        let promise = js_sys::Promise::from(promise_val);
+                        match JsFuture::from(promise).await {
+                            Ok(val) => {
+                                if let Some(url_str) = val.as_string() {
+                                    let is_first = photos.get_untracked().is_empty();
+                                    photos.update(|p| p.push(url_str.clone()));
+                                    if is_first {
+                                        analyze_photo_with_ai(url_str);
+                                    }
+                                } else {
+                                    error_message.set(Some("Respuesta inesperada al subir foto.".to_string()));
                                 }
-                            } else {
-                                error_message.set(Some("Respuesta inesperada al subir foto.".to_string()));
+                            }
+                            Err(e) => {
+                                let msg = if let Some(err) = e.dyn_ref::<js_sys::Error>() {
+                                    err.message().into()
+                                } else if let Some(s) = e.as_string() {
+                                    s
+                                } else {
+                                    "Error al procesar la fotografía.".to_string()
+                                };
+                                error_message.set(Some(msg));
                             }
                         }
-                        Err(e) => {
-                            let msg = if let Some(err) = e.dyn_ref::<js_sys::Error>() {
-                                err.message().into()
-                            } else if let Some(s) = e.as_string() {
-                                s
-                            } else {
-                                "Error al subir la fotografía.".to_string()
-                            };
-                            error_message.set(Some(msg));
-                        }
+                    }
+                    Err(e) => {
+                        error_message.set(Some(format!("Error invocando cargador: {:?}", e)));
                     }
                 }
-                Err(e) => {
-                    error_message.set(Some(format!("Error invocando cargador: {:?}", e)));
-                }
-            }
-            let _ = js_sys::eval("if(document.getElementById('report-photo-input')) document.getElementById('report-photo-input').value = ''");
-            is_uploading_photo.set(false);
-        });
+                let _ = js_sys::eval(&format!(
+                    "if(document.getElementById('{}')) document.getElementById('{}').value = ''",
+                    input_id, input_id
+                ));
+                is_uploading_photo.set(false);
+            });
+        }
+    };
+
+    let upload_camera_photo = {
+        let upload = upload_from_input.clone();
+        move |_| upload("report-camera-input")
+    };
+
+    let upload_gallery_photo = {
+        let upload = upload_from_input.clone();
+        move |_| upload("report-gallery-input")
     };
 
     let remove_photo = move |idx: usize| {
@@ -435,13 +460,21 @@ pub fn ReportDialog(
                             <div class="w-12 h-1.5 bg-slate-300 rounded-full"></div>
                         </div>
 
-                        // Accessible file input for photos (camera or gallery on mobile, file dialog on desktop)
+                        // Accessible inputs: Camara directa y Galeria/Archivos
                         <input
                             type="file"
-                            id="report-photo-input"
+                            id="report-camera-input"
+                            accept="image/*"
+                            capture="environment"
+                            class="sr-only"
+                            on:change=upload_camera_photo
+                        />
+                        <input
+                            type="file"
+                            id="report-gallery-input"
                             accept="image/*"
                             class="sr-only"
-                            on:change=upload_selected_photo
+                            on:change=upload_gallery_photo
                         />
 
                         // Modal Header
@@ -589,66 +622,87 @@ pub fn ReportDialog(
 
                                 // Upload Placeholder Slot (if less than 2 photos)
                                 {move || if photos.get().len() == 0 {
-                                    // 0 photos: Wide 2-column hero uploader
-                                    view! {
-                                        <label
-                                            for="report-photo-input"
-                                            class=move || format!(
-                                                "col-span-2 py-6 px-4 rounded-2xl border-2 border-dashed border-slate-300 hover:border-purple-400 bg-white hover:bg-purple-50/30 text-slate-700 text-xs font-semibold flex flex-col items-center justify-center space-y-2 transition active:scale-[0.99] cursor-pointer shadow-2xs group select-none {}",
-                                                if is_uploading_photo.get() || is_analyzing_ai.get() { "pointer-events-none opacity-60" } else { "" }
-                                            )
-                                        >
-                                            {move || if is_uploading_photo.get() {
-                                                view! {
-                                                    <span class="inline-block w-5 h-5 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></span>
-                                                    <span class="font-bold text-purple-700">"Optimizando imagen..."</span>
-                                                }.into_view()
-                                            } else {
-                                                view! {
-                                                    <div class="w-10 h-10 rounded-full bg-slate-100 group-hover:bg-purple-100 text-slate-600 group-hover:text-purple-700 flex items-center justify-center transition shadow-2xs">
-                                                        <i class="fa-solid fa-camera text-base"></i>
-                                                    </div>
-                                                    <div class="text-center">
-                                                        <span class="block font-bold text-slate-800 text-xs">
-                                                            "Tomar Foto o Subir Evidencia"
-                                                        </span>
-                                                        <span class="block text-[10px] text-slate-400 font-normal mt-0.5">
-                                                            "Toca para abrir cámara o galería · Análisis Gemini AI"
-                                                        </span>
-                                                    </div>
-                                                }.into_view()
-                                            }}
-                                        </label>
-                                    }.into_view()
+                                    if is_uploading_photo.get() {
+                                        view! {
+                                            <div class="col-span-2 py-6 px-4 rounded-2xl border-2 border-dashed border-purple-300 bg-purple-50/50 flex flex-col items-center justify-center space-y-2">
+                                                <span class="inline-block w-6 h-6 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></span>
+                                                <span class="font-bold text-xs text-purple-800">"Optimizando y subiendo fotografía..."</span>
+                                                <span class="text-[10px] text-purple-600 font-medium">"Reduciendo tamaño para transmisión rápida"</span>
+                                            </div>
+                                        }.into_view()
+                                    } else {
+                                        // 0 photos: Side-by-side Camera and Gallery buttons
+                                        view! {
+                                            <label
+                                                for="report-camera-input"
+                                                class=move || format!(
+                                                    "col-span-1 py-4 px-3 rounded-2xl border-2 border-emerald-300 hover:border-emerald-500 bg-gradient-to-b from-emerald-50/80 to-white text-slate-800 flex flex-col items-center justify-center space-y-2 transition active:scale-[0.98] cursor-pointer shadow-xs group select-none text-center {}",
+                                                    if is_uploading_photo.get() || is_analyzing_ai.get() { "pointer-events-none opacity-50" } else { "" }
+                                                )
+                                            >
+                                                <div class="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition">
+                                                    <i class="fa-solid fa-camera text-base"></i>
+                                                </div>
+                                                <div>
+                                                    <span class="block font-bold text-xs text-slate-900 leading-tight">"Tomar Foto"</span>
+                                                    <span class="block text-[10px] text-emerald-700 font-semibold mt-0.5">"Abrir cámara"</span>
+                                                </div>
+                                            </label>
+
+                                            <label
+                                                for="report-gallery-input"
+                                                class=move || format!(
+                                                    "col-span-1 py-4 px-3 rounded-2xl border-2 border-slate-200 hover:border-slate-400 bg-gradient-to-b from-slate-50/80 to-white text-slate-800 flex flex-col items-center justify-center space-y-2 transition active:scale-[0.98] cursor-pointer shadow-xs group select-none text-center {}",
+                                                    if is_uploading_photo.get() || is_analyzing_ai.get() { "pointer-events-none opacity-50" } else { "" }
+                                                )
+                                            >
+                                                <div class="w-11 h-11 rounded-2xl bg-slate-100 text-slate-700 flex items-center justify-center shadow-xs group-hover:scale-105 transition">
+                                                    <i class="fa-solid fa-images text-base"></i>
+                                                </div>
+                                                <div>
+                                                    <span class="block font-bold text-xs text-slate-900 leading-tight">"Subir Galería"</span>
+                                                    <span class="block text-[10px] text-slate-500 font-medium mt-0.5">"Elegir archivo"</span>
+                                                </div>
+                                            </label>
+                                        }.into_view()
+                                    }
                                 } else if photos.get().len() == 1 {
-                                    // 1 photo: Symmetric second slot
+                                    // 1 photo: Symmetric second slot with camera & gallery choices
                                     view! {
-                                        <label
-                                            for="report-photo-input"
-                                            class=move || format!(
-                                                "aspect-square w-full rounded-2xl border-2 border-dashed border-slate-300 hover:border-purple-400 bg-white hover:bg-purple-50/30 text-slate-700 text-xs font-semibold flex flex-col items-center justify-center p-3 text-center transition active:scale-[0.99] cursor-pointer shadow-2xs group select-none {}",
-                                                if is_uploading_photo.get() || is_analyzing_ai.get() { "pointer-events-none opacity-60" } else { "" }
-                                            )
-                                        >
+                                        <div class="aspect-square w-full rounded-2xl border-2 border-dashed border-slate-300 bg-white p-2.5 flex flex-col justify-between items-center text-center shadow-2xs">
                                             {move || if is_uploading_photo.get() {
                                                 view! {
-                                                    <span class="inline-block w-5 h-5 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></span>
-                                                    <span class="font-bold text-purple-700 text-[11px] mt-1">"Subiendo..."</span>
+                                                    <div class="h-full flex flex-col items-center justify-center space-y-1">
+                                                        <span class="inline-block w-5 h-5 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></span>
+                                                        <span class="font-bold text-purple-700 text-[11px] mt-1">"Subiendo..."</span>
+                                                    </div>
                                                 }.into_view()
                                             } else {
                                                 view! {
-                                                    <div class="w-9 h-9 rounded-full bg-slate-100 group-hover:bg-purple-100 text-slate-600 group-hover:text-purple-700 flex items-center justify-center transition shadow-2xs mb-1.5">
-                                                        <i class="fa-solid fa-plus text-xs"></i>
+                                                    <span class="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-0.5">
+                                                        "+ 2da Evidencia"
+                                                    </span>
+                                                    <div class="w-full grid grid-cols-2 gap-1.5 mb-0.5">
+                                                        <label
+                                                            for="report-camera-input"
+                                                            class="py-2 px-1 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 flex flex-col items-center justify-center transition active:scale-95 cursor-pointer shadow-2xs"
+                                                            title="Tomar foto con cámara"
+                                                        >
+                                                            <i class="fa-solid fa-camera text-xs mb-0.5 text-emerald-600"></i>
+                                                            <span class="text-[9px] font-bold">"Cámara"</span>
+                                                        </label>
+                                                        <label
+                                                            for="report-gallery-input"
+                                                            class="py-2 px-1 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 flex flex-col items-center justify-center transition active:scale-95 cursor-pointer shadow-2xs"
+                                                            title="Elegir de galería"
+                                                        >
+                                                            <i class="fa-solid fa-images text-xs mb-0.5 text-slate-600"></i>
+                                                            <span class="text-[9px] font-bold">"Galería"</span>
+                                                        </label>
                                                     </div>
-                                                    <span class="block font-bold text-slate-800 text-[11px] leading-tight">
-                                                        "Agregar Foto"
-                                                    </span>
-                                                    <span class="block text-[10px] text-slate-400 font-normal mt-0.5">
-                                                        "(Opcional)"
-                                                    </span>
                                                 }.into_view()
                                             }}
-                                        </label>
+                                        </div>
                                     }.into_view()
                                 } else {
                                     view! { <span class="hidden"></span> }.into_view()
