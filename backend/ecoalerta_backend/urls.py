@@ -13,5 +13,6 @@ urlpatterns = [
     path("api/auth/google/config/", GoogleAuthConfigView.as_view(), name="google_auth_config"),
     path("api/upload/", ImageUploadView.as_view(), name="image_upload"),
     path("api/", include("alerts.urls")),
+    re_path(r"^static/(?P<path>.*)$", serve, {"document_root": settings.STATIC_ROOT}),
     re_path(r"^media/(?P<path>.*)$", serve, {"document_root": settings.MEDIA_ROOT}),
 ]
