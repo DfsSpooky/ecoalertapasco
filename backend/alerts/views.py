@@ -761,7 +761,7 @@ def compress_and_convert_to_webp(file_obj, max_dimension=1600, quality=80):
 
 
 class ImageUploadView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
     throttle_classes = [ImageUploadRateThrottle]
     parser_classes = [MultiPartParser, FormParser]
 

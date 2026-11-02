@@ -245,6 +245,7 @@ pub fn ReportDialog(
                     error_message.set(Some(format!("Error invocando cargador: {:?}", e)));
                 }
             }
+            let _ = js_sys::eval("if(document.getElementById('report-photo-input')) document.getElementById('report-photo-input').value = ''");
             is_uploading_photo.set(false);
         });
     };
@@ -434,13 +435,12 @@ pub fn ReportDialog(
                             <div class="w-12 h-1.5 bg-slate-300 rounded-full"></div>
                         </div>
 
-                        // Hidden file input for photos (with camera capture on mobile)
+                        // Accessible file input for photos (camera or gallery on mobile, file dialog on desktop)
                         <input
                             type="file"
                             id="report-photo-input"
                             accept="image/*"
-                            capture="environment"
-                            class="hidden"
+                            class="sr-only"
                             on:change=upload_selected_photo
                         />
 
@@ -591,13 +591,12 @@ pub fn ReportDialog(
                                 {move || if photos.get().len() == 0 {
                                     // 0 photos: Wide 2-column hero uploader
                                     view! {
-                                        <button
-                                            type="button"
-                                            class="col-span-2 py-6 px-4 rounded-2xl border-2 border-dashed border-slate-300 hover:border-purple-400 bg-white hover:bg-purple-50/30 text-slate-700 text-xs font-semibold flex flex-col items-center justify-center space-y-2 transition active:scale-[0.99] cursor-pointer shadow-2xs group"
-                                            disabled=move || is_uploading_photo.get() || is_analyzing_ai.get()
-                                            on:click=move |_| {
-                                                let _ = js_sys::eval("document.getElementById('report-photo-input').click()");
-                                            }
+                                        <label
+                                            for="report-photo-input"
+                                            class=move || format!(
+                                                "col-span-2 py-6 px-4 rounded-2xl border-2 border-dashed border-slate-300 hover:border-purple-400 bg-white hover:bg-purple-50/30 text-slate-700 text-xs font-semibold flex flex-col items-center justify-center space-y-2 transition active:scale-[0.99] cursor-pointer shadow-2xs group select-none {}",
+                                                if is_uploading_photo.get() || is_analyzing_ai.get() { "pointer-events-none opacity-60" } else { "" }
+                                            )
                                         >
                                             {move || if is_uploading_photo.get() {
                                                 view! {
@@ -614,23 +613,22 @@ pub fn ReportDialog(
                                                             "Tomar Foto o Subir Evidencia"
                                                         </span>
                                                         <span class="block text-[10px] text-slate-400 font-normal mt-0.5">
-                                                            "JPG, PNG, WEBP · Análisis automático Gemini AI"
+                                                            "Toca para abrir cámara o galería · Análisis Gemini AI"
                                                         </span>
                                                     </div>
                                                 }.into_view()
                                             }}
-                                        </button>
+                                        </label>
                                     }.into_view()
                                 } else if photos.get().len() == 1 {
                                     // 1 photo: Symmetric second slot
                                     view! {
-                                        <button
-                                            type="button"
-                                            class="aspect-square w-full rounded-2xl border-2 border-dashed border-slate-300 hover:border-purple-400 bg-white hover:bg-purple-50/30 text-slate-700 text-xs font-semibold flex flex-col items-center justify-center p-3 text-center transition active:scale-[0.99] cursor-pointer shadow-2xs group"
-                                            disabled=move || is_uploading_photo.get() || is_analyzing_ai.get()
-                                            on:click=move |_| {
-                                                let _ = js_sys::eval("document.getElementById('report-photo-input').click()");
-                                            }
+                                        <label
+                                            for="report-photo-input"
+                                            class=move || format!(
+                                                "aspect-square w-full rounded-2xl border-2 border-dashed border-slate-300 hover:border-purple-400 bg-white hover:bg-purple-50/30 text-slate-700 text-xs font-semibold flex flex-col items-center justify-center p-3 text-center transition active:scale-[0.99] cursor-pointer shadow-2xs group select-none {}",
+                                                if is_uploading_photo.get() || is_analyzing_ai.get() { "pointer-events-none opacity-60" } else { "" }
+                                            )
                                         >
                                             {move || if is_uploading_photo.get() {
                                                 view! {
@@ -650,7 +648,7 @@ pub fn ReportDialog(
                                                     </span>
                                                 }.into_view()
                                             }}
-                                        </button>
+                                        </label>
                                     }.into_view()
                                 } else {
                                     view! { <span class="hidden"></span> }.into_view()
