@@ -24,8 +24,30 @@ pub fn save_remembered_google_user(user: &AuthUser) {
 pub fn load_remembered_google_user() -> Option<AuthUser> {
     let win = window()?;
     let storage = win.local_storage().ok()??;
-    let data_str = storage.get_item(KEY_REMEMBERED_GOOGLE_USER).ok()??;
-    serde_json::from_str::<AuthUser>(&data_str).ok()
+    if let Ok(Some(data_str)) = storage.get_item(KEY_REMEMBERED_GOOGLE_USER) {
+        if let Ok(u) = serde_json::from_str::<AuthUser>(&data_str) {
+            return Some(u);
+        }
+    }
+    // Fallback: Check if individual user keys were stored from previous sessions
+    let username = storage.get_item(KEY_USERNAME).ok()??;
+    let email = storage.get_item(KEY_EMAIL).ok()?.filter(|e| !e.is_empty());
+    let photo_url = storage.get_item(KEY_PHOTO_URL).ok()?.filter(|p| !p.is_empty());
+    let full_name = storage.get_item(KEY_FULL_NAME).ok()?.filter(|f| !f.is_empty());
+    let token = storage.get_item(KEY_TOKEN).ok()?.unwrap_or_default();
+
+    if email.is_some() || photo_url.is_some() || full_name.is_some() {
+        Some(AuthUser {
+            token,
+            username,
+            email,
+            is_staff: false,
+            photo_url,
+            full_name,
+        })
+    } else {
+        None
+    }
 }
 
 pub fn clear_remembered_google_user() {

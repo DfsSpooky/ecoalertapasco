@@ -639,6 +639,25 @@ pub fn UserProfileModal(
                                     </li>
                                 </ul>
                             </section>
+
+                            // Botón para cerrar sesión desde el perfil (móvil y escritorio)
+                            <div class="pt-1 pb-3">
+                                <button
+                                    type="button"
+                                    class="w-full py-3 px-4 rounded-[16px] text-xs font-semibold text-[#FF3B30] bg-[#FF3B30]/10 hover:bg-[#FF3B30]/15 active:scale-[0.99] transition flex items-center justify-center space-x-2 cursor-pointer"
+                                    on:click=move |_| {
+                                        crate::storage::logout_and_clear_session(current_user);
+                                        show_modal.set(false);
+                                    }
+                                >
+                                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                                        <polyline points="16 17 21 12 16 7"/>
+                                        <line x1="21" y1="12" x2="9" y2="12"/>
+                                    </svg>
+                                    <span>"Cerrar Sesión"</span>
+                                </button>
+                            </div>
                         }.into_view()
                     } else {
                         view! {

@@ -388,6 +388,7 @@
       renderButton: function(containerId) {
         const container = document.getElementById(containerId);
         if (!container) return;
+        if (container.querySelector('iframe')) return;
         const self = this;
         function tryRender() {
           if (window.google && window.google.accounts && window.google.accounts.id && self.clientId) {
@@ -398,13 +399,15 @@
                 size: 'large',
                 type: 'standard',
                 shape: 'pill',
-                text: 'signin_with',
+                text: 'continue_with',
                 logo_alignment: 'left',
-                width: Math.min(360, container.offsetWidth || 300)
+                width: Math.min(360, Math.max(280, container.offsetWidth || 300))
               });
             } catch(e) {
               console.warn("Render Google button error:", e);
             }
+          } else {
+            setTimeout(tryRender, 150);
           }
         }
         tryRender();
@@ -514,7 +517,7 @@
         window.addEventListener('resize', () => {
           if (resizeTimeout) clearTimeout(resizeTimeout);
           resizeTimeout = setTimeout(() => {
-            if (this.map) {
+            if (this.map && !window.isReportModalOpen && !window.isAuthModalOpen) {
               this.map.invalidateSize({ animate: false });
             }
           }, 80);
@@ -522,10 +525,10 @@
 
         let centerDebounce = null;
         this.map.on('move', () => {
-          if (!window.isReportMode || window.isReportModalOpen) return;
+          if (!window.isReportMode || window.isReportModalOpen || window.isAuthModalOpen) return;
           if (centerDebounce) clearTimeout(centerDebounce);
           centerDebounce = setTimeout(() => {
-            if (window.isReportMode && !window.isReportModalOpen && window.onMapCenterChanged && this.map) {
+            if (window.isReportMode && !window.isReportModalOpen && !window.isAuthModalOpen && window.onMapCenterChanged && this.map) {
               const center = this.map.getCenter();
               window.onMapCenterChanged(center.lat, center.lng);
             }
@@ -534,7 +537,7 @@
 
         // Permitir hacer clic directo en el mapa para ubicar el reporte exactamente donde el usuario señale
         this.map.on('click', (e) => {
-          if (window.isReportMode && !window.isReportModalOpen) {
+          if (window.isReportMode && !window.isReportModalOpen && !window.isAuthModalOpen) {
             this.map.flyTo([e.latlng.lat, e.latlng.lng], Math.max(this.map.getZoom(), 15), { duration: 0.4 });
             if (window.onMapCenterChanged) {
               window.onMapCenterChanged(e.latlng.lat, e.latlng.lng);

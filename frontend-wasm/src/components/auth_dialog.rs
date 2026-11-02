@@ -25,31 +25,40 @@ pub fn AuthDialog(
     let remembered_user = create_rw_signal(load_remembered_google_user());
     let switch_to_other_account = create_rw_signal(false);
 
-    // Fetch Google configuration when dialog is opened
+    // Fetch Google configuration when dialog is opened & sync modal flag
     create_effect(move |_| {
-        if show_dialog.get() {
+        let is_open = show_dialog.get();
+        let _ = js_sys::eval(&format!("window.isAuthModalOpen = {};", is_open));
+        if is_open {
             error_message.set(None);
             remembered_user.set(load_remembered_google_user());
             switch_to_other_account.set(false);
-            spawn_local(async move {
-                let req = gloo_net::http::Request::get(&google_auth_config_url()).send().await;
-                if let Ok(resp) = req {
-                    if resp.ok() {
-                        if let Ok(cfg) = resp.json::<GoogleAuthConfig>().await {
-                            let cid = cfg.client_id.clone();
-                            google_config.set(Some(cfg));
-                            if !cid.trim().is_empty() {
-                                let _ = js_sys::eval(&format!("window.ecoGoogleAuth.init('{}')", cid));
-                                let _ = js_sys::eval("setTimeout(function() { window.ecoGoogleAuth.renderButton('google-gis-btn-container'); }, 150)");
+
+            // Fetch Google configuration once if not cached
+            if google_config.get_untracked().is_none() {
+                spawn_local(async move {
+                    let req = gloo_net::http::Request::get(&google_auth_config_url()).send().await;
+                    if let Ok(resp) = req {
+                        if resp.ok() {
+                            if let Ok(cfg) = resp.json::<GoogleAuthConfig>().await {
+                                let cid = cfg.client_id.clone();
+                                google_config.set(Some(cfg));
+                                if !cid.trim().is_empty() {
+                                    let _ = js_sys::eval(&format!("window.ecoGoogleAuth.init('{}')", cid));
+                                    let _ = js_sys::eval("setTimeout(function() { if (window.ecoGoogleAuth) window.ecoGoogleAuth.renderButton('google-gis-btn-container'); }, 100)");
+                                }
                             }
                         }
                     }
-                }
-            });
+                });
+            } else {
+                let _ = js_sys::eval("setTimeout(function() { if (window.ecoGoogleAuth) window.ecoGoogleAuth.renderButton('google-gis-btn-container'); }, 100)");
+            }
         }
     });
 
     let close_dialog = move |_| {
+        let _ = js_sys::eval("window.isAuthModalOpen = false;");
         error_message.set(None);
         show_dialog.set(false);
     };
@@ -212,23 +221,26 @@ pub fn AuthDialog(
                 let saved_user = user.clone();
 
                 spawn_local(async move {
-                    let req = gloo_net::http::Request::get(&profile_url())
-                        .header("Authorization", &format!("Token {}", saved_user.token))
-                        .send()
-                        .await;
+                    if !saved_user.token.trim().is_empty() {
+                        let req = gloo_net::http::Request::get(&profile_url())
+                            .header("Authorization", &format!("Token {}", saved_user.token))
+                            .send()
+                            .await;
 
-                    if let Ok(resp) = req {
-                        if resp.ok() {
-                            save_auth_session(&saved_user);
-                            current_user.set(Some(saved_user));
-                            is_submitting.set(false);
-                            show_dialog.set(false);
-                            return;
+                        if let Ok(resp) = req {
+                            if resp.ok() {
+                                save_auth_session(&saved_user);
+                                current_user.set(Some(saved_user));
+                                is_submitting.set(false);
+                                show_dialog.set(false);
+                                return;
+                            }
                         }
                     }
 
+                    // Token expired or invalidated: prompt Google One Tap / GIS
+                    let _ = js_sys::eval("if (window.ecoGoogleAuth) { window.ecoGoogleAuth.prompt(); }");
                     is_submitting.set(false);
-                    let _ = js_sys::eval("window.ecoGoogleAuth.prompt()");
                 });
             }
         }
@@ -385,7 +397,10 @@ pub fn AuthDialog(
                                         let forget_fn = forget_fn.clone();
 
                                         view! {
-                                            <div class="p-4 rounded-2xl bg-gradient-to-br from-emerald-50/90 to-teal-50/50 border border-emerald-200/90 space-y-3.5 shadow-2xs animate-in fade-in">
+                                            <div
+                                                class="p-4 rounded-2xl bg-gradient-to-br from-emerald-50/90 to-teal-50/50 border-2 border-emerald-300 hover:border-emerald-400 space-y-3.5 shadow-xs transition-all cursor-pointer active:scale-[0.99]"
+                                                on:click=login_fn.clone()
+                                            >
                                                 <div class="flex items-center space-x-3">
                                                     {if let Some(ref photo) = rem_user.photo_url {
                                                         view! {
@@ -403,7 +418,7 @@ pub fn AuthDialog(
                                                             <svg class="w-3 h-3 text-emerald-600" viewBox="0 0 24 24" fill="currentColor">
                                                                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
                                                             </svg>
-                                                            <span>"Cuenta Detectada"</span>
+                                                            <span>"Cuenta de Google Detectada"</span>
                                                         </span>
                                                         <h4 class="text-xs sm:text-sm font-bold text-slate-900 truncate mt-1">
                                                             {rem_user.full_name.clone().unwrap_or_else(|| rem_user.username.clone())}
@@ -417,9 +432,9 @@ pub fn AuthDialog(
                                                 // Botón principal de Iniciar Sesión con la cuenta detectada
                                                 <button
                                                     type="button"
-                                                    class="w-full py-3 px-4 rounded-xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] shadow-sm shadow-emerald-600/20 flex items-center justify-center space-x-2 transition cursor-pointer disabled:opacity-50"
+                                                    class="w-full py-3.5 px-4 rounded-xl font-bold text-xs sm:text-sm text-white bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 shadow-md shadow-emerald-600/25 flex items-center justify-center space-x-2 transition cursor-pointer disabled:opacity-50"
                                                     disabled=move || is_submitting.get()
-                                                    on:click=login_fn
+                                                    on:click=login_fn.clone()
                                                 >
                                                     {move || if is_submitting.get() {
                                                         view! {
@@ -431,13 +446,17 @@ pub fn AuthDialog(
                                                             <svg class="w-4 h-4 fill-current shrink-0" viewBox="0 0 24 24">
                                                                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/>
                                                             </svg>
-                                                            <span>{format!("Iniciar sesión como {}", first_name)}</span>
+                                                            <span>{format!("Continuar como {}", first_name)}</span>
+                                                            <span class="text-emerald-200 font-semibold text-xs">"· Iniciar Sesión"</span>
                                                         }.into_view()
                                                     }}
                                                 </button>
 
                                                 // Opciones para cambiar de cuenta o desconectar
-                                                <div class="pt-2 border-t border-emerald-100 flex items-center justify-between text-[11px]">
+                                                <div
+                                                    class="pt-2 border-t border-emerald-100 flex items-center justify-between text-[11px]"
+                                                    on:click=move |ev| ev.stop_propagation()
+                                                >
                                                     <button
                                                         type="button"
                                                         class="text-slate-600 hover:text-emerald-700 font-semibold transition cursor-pointer flex items-center space-x-1"
@@ -475,36 +494,16 @@ pub fn AuthDialog(
                                                 </div>
 
                                                 // Official GIS native button container (rendered if Client ID is configured)
-                                                <div id="google-gis-btn-container" class="w-full flex justify-center empty:hidden min-h-[42px]"></div>
+                                                <div id="google-gis-btn-container" class="w-full flex justify-center empty:hidden min-h-[44px]"></div>
 
-                                                // Fallback button shown only if Google GIS is loading or needs prompt
+                                                // Always visible high-contrast primary button as well (or if GIS is loading/prompting)
                                                 <button
                                                     type="button"
-                                                    class=move || {
-                                                        let has_cid = google_config
-                                                            .get()
-                                                            .map(|c| !c.client_id.trim().is_empty())
-                                                            .unwrap_or(false);
-                                                        if has_cid {
-                                                            "hidden"
-                                                        } else {
-                                                            "w-full py-2.5 px-4 rounded-xl font-medium text-xs text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 hover:border-slate-400 shadow-xs flex items-center justify-center space-x-3 transition cursor-pointer active:scale-[0.99] disabled:opacity-50"
-                                                        }
-                                                    }
+                                                    id="eco-google-direct-btn"
+                                                    class="w-full py-3.5 px-4 rounded-xl font-bold text-xs sm:text-sm text-slate-800 bg-white hover:bg-slate-50 border-2 border-slate-300 hover:border-slate-400 shadow-sm flex items-center justify-center space-x-3 transition cursor-pointer active:scale-[0.99] disabled:opacity-50"
                                                     disabled=move || is_submitting.get()
                                                     on:click=move |_| {
-                                                        let has_cid = google_config
-                                                            .get()
-                                                            .map(|c| !c.client_id.trim().is_empty())
-                                                            .unwrap_or(false);
-
-                                                        if has_cid {
-                                                            let _ = js_sys::eval("window.ecoGoogleAuth.prompt()");
-                                                        } else {
-                                                            error_message.set(Some(
-                                                                "El servicio de Google se está conectando. Por favor espera un momento o revisa tu conexión.".to_string()
-                                                            ));
-                                                        }
+                                                        let _ = js_sys::eval("if (window.ecoGoogleAuth) { window.ecoGoogleAuth.prompt(); }");
                                                     }
                                                 >
                                                     <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24">
@@ -513,8 +512,8 @@ pub fn AuthDialog(
                                                         <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-2.09-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
                                                         <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
                                                     </svg>
-                                                    <span class="font-semibold text-slate-800">
-                                                        "Continuar con Google"
+                                                    <span class="font-bold text-slate-800">
+                                                        "Continuar con Google · Proceder"
                                                     </span>
                                                 </button>
 
