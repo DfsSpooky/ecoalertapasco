@@ -1,6 +1,6 @@
 # Guía de Despliegue de EcoAlerta en Coolify 🌱
 
-Esta guía detalla el paso a paso para desplegar la aplicación completa (**Base de Datos**, **Backend Django**, y **Frontend Flutter Web**) en tu instancia de **Coolify**.
+Esta guía detalla el paso a paso para desplegar la aplicación completa en producción (**Base de Datos PostgreSQL**, **Backend Django**, y **Frontend WebAssembly Rust/Leptos**) en tu instancia de **Coolify**.
 
 ---
 
@@ -10,9 +10,10 @@ Para producción, se recomienda configurar **tres recursos individuales** dentro
 
 ```mermaid
 graph TD
-    User([Usuario]) -->|HTTPS| FE(Frontend: Flutter Web)
-    FE -->|API HTTPS| BE(Backend: Django)
+    User([Ciudadano / Autoridad]) -->|HTTPS| FE(Frontend: Rust + Leptos WASM / Nginx)
+    FE <-->|WebSocket Tiempo Real WSS /ws/map/| BE(Backend: Django Channels + Uvicorn ASGI)
     BE -->|Conexión Interna| DB[(Base de Datos: PostgreSQL)]
+    BE -.->|Opcional Multiréplica| RD[(Redis Channel Layer)]
 ```
 
 ---
@@ -49,30 +50,40 @@ El backend de Django se compilará y ejecutará usando el [Dockerfile](file:///U
 4. Asigna un dominio para la API en el campo **Domains** (ej. `https://api.ecoalerta.tudominio.com`). Coolify gestionará el certificado SSL automáticamente.
 5. Ve a la pestaña **Environment Variables** (Variables de Entorno) y añade lo siguiente:
    - `DEBUG`: `False`
-   - `SECRET_KEY`: *(Genera una cadena aleatoria y segura para producción)*
+   - `SECRET_KEY`: *(Genera una cadena aleatoria larga y segura para producción)*
+   - `ALLOWED_HOSTS`: `api.ecoalerta.tudominio.com,localhost,127.0.0.1`
+   - `CORS_ALLOWED_ORIGINS`: `https://ecoalerta.tudominio.com`
+   - `CSRF_TRUSTED_ORIGINS`: `https://ecoalerta.tudominio.com,https://api.ecoalerta.tudominio.com`
    - `DB_HOST`: *(El host interno de la base de datos de Coolify)*
    - `DB_NAME`: `ecoalerta`
    - `DB_USER`: `ecoalerta_user`
    - `DB_PASSWORD`: *(La contraseña que definiste en el Paso 1)*
    - `DB_PORT`: `5432`
-6. Haz clic en **Deploy**. El Dockerfile se encargará automáticamente de ejecutar las migraciones (`migrate`) y cargar los datos semilla (`seed_data`) antes de iniciar con `Gunicorn`.
+   - `GOOGLE_CLIENT_ID`: *(Opcional — Tu Web Client ID de Google Cloud Console para habilitar "Continuar con Google")*
+   - `TURNSTILE_SITEKEY`: *(Opcional — Por defecto usa la clave de prueba universal `1x00000000000000000000AA` para desarrollo/staging; en producción ingresa tu Site Key de Cloudflare)*
+   - `TURNSTILE_SECRET_KEY`: *(Opcional — Por defecto usa la clave de prueba universal `1x0000000000000000000000000000000AA`; en producción ingresa tu Secret Key de Cloudflare)*
+   - `TURNSTILE_ENABLED`: `true` *(o `false` si deseas desactivar temporalmente el anti-bot)*
+   - `REDIS_URL`: *(Opcional — Ej. `redis://redis-interno:6379/0` si despliegas múltiples réplicas; con 1 contenedor Uvicorn funciona nativamente sin requerir Redis externo)*
+6. En **Persistent Storages** (Almacenamiento Persistente), monta un volumen para conservar las fotografías de evidencia WebP entre redespliegues:
+   - **Mount Path**: `/app/media`
+7. Haz clic en **Deploy**. El contenedor ejecutará de forma segura las migraciones (`migrate --noinput`), compilará estáticos (`collectstatic`), registrará el catálogo inicial de estaciones de acopio únicamente si la tabla está vacía (`seed_waste_points --if-empty`, sin borrar jamás denuncias reales) e iniciará el servidor ASGI **Uvicorn** con soporte nativo para HTTP + WebSockets (`wss://`).
 
 ---
 
-## ⚡ Paso 3: Desplegar el Frontend (Flutter Web)
+## ⚡ Paso 3: Desplegar el Frontend WebAssembly (`frontend-wasm`)
 
-El frontend de Flutter Web se compilará en Coolify usando el [Dockerfile](file:///Users/miguel/Documents/Proyectos/EcoAlerta/Dockerfile) de la raíz del proyecto y se servirá mediante **Nginx**.
+El frontend moderno en Rust + Leptos WebAssembly se compila usando `frontend-wasm/Dockerfile` y se sirve mediante **Nginx** con compresión Gzip para `.wasm` e inyección dinámica de `BACKEND_URL`.
 
 1. En Coolify, haz clic en **+ New** -> **Application** -> Selecciona el mismo repositorio Git.
 2. Configura los ajustes de construcción:
    - **Build Pack**: Selecciona `Dockerfile`.
-   - **Docker Build Path**: Déjalo en `/` (raíz). Buscará el `Dockerfile` principal de la raíz.
-   - **Ports Excluded/Exposed**: Indica el puerto `80`.
+   - **Base Directory (Build Context)**: Cámbialo a `/frontend-wasm`.
+   - **Dockerfile Location**: `/Dockerfile` (relativo a `/frontend-wasm`).
+   - **Ports Exposes**: Indica el puerto `80`.
 3. Asigna tu dominio principal en el campo **Domains** (ej. `https://ecoalerta.tudominio.com`).
-4. Ve a la pestaña **Build Arguments** (Argumentos de Construcción) en el panel de Coolify. **(¡IMPORTANTE!)**:
-   - Añade la variable `BACKEND_URL` apuntando al dominio público de tu API de Django que configuraste en el Paso 2.
-   - **Ejemplo**: `BACKEND_URL=https://api.ecoalerta.tudominio.com`
-5. Haz clic en **Deploy**. Coolify descargará el SDK de Flutter, compilará la versión Web inyectando el dominio del backend, y levantará el contenedor de Nginx.
+4. Ve a **Environment Variables** (funciona tanto en Runtime como en Build Time gracias al entrypoint de Nginx):
+   - Añade `BACKEND_URL=https://api.ecoalerta.tudominio.com` (sin barra final `/`).
+5. Haz clic en **Deploy**. Coolify compilará el binario WebAssembly en modo `--release` e inyectará automáticamente `BACKEND_URL` en `<meta name="ecoalerta-api-url">` al iniciar Nginx.
 
 ---
 

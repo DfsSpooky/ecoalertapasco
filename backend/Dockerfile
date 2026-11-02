@@ -21,11 +21,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar el código del proyecto
 COPY . /app/
 
-# Asegurar directorio de subida de medios persistente
-RUN mkdir -p /app/media/uploads
+# Asegurar directorios persistentes de medios y archivos estáticos
+RUN mkdir -p /app/media/uploads /app/staticfiles
 
 # Exponer puerto
 EXPOSE 8000
 
-# Comando de inicio: Migrar, cargar semillas y levantar con Gunicorn
-CMD ["sh", "-c", "python manage.py migrate && python manage.py seed_data && gunicorn ecoalerta_backend.wsgi:application --bind 0.0.0.0:8000"]
+# Comando de inicio ASGI para producción (HTTP + WebSockets en tiempo real con Uvicorn + uvloop):
+# - Ejecuta migraciones sin borrar datos reales
+# - Inicializa los puntos municipales de acopio únicamente si la tabla está vacía (--if-empty)
+# - Levanta Uvicorn soportando cabeceras de Reverse Proxy HTTPS/WSS (--proxy-headers)
+CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && python manage.py seed_waste_points --if-empty && uvicorn ecoalerta_backend.asgi:application --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*' --ws-ping-interval 25 --ws-ping-timeout 30"]

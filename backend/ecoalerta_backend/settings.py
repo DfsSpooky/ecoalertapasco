@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "channels",
     "corsheaders",
     "rest_framework",
     "alerts",
@@ -89,6 +90,38 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "ecoalerta_backend.wsgi.application"
+ASGI_APPLICATION = "ecoalerta_backend.asgi.application"
+
+# Capa de tiempo real WebSocket (Django Channels + Uvicorn ASGI):
+# - Si se define REDIS_URL en producción (ej. Coolify Redis o Docker Compose), usa RedisPubSubChannelLayer nativo de baja latencia.
+# - Si no se define REDIS_URL, usa InMemoryChannelLayer compatible al 100% con Uvicorn ASGI.
+REDIS_URL = os.environ.get("REDIS_URL", "").strip()
+if REDIS_URL:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.pubsub.RedisPubSubChannelLayer",
+            "CONFIG": {
+                "hosts": [REDIS_URL],
+            },
+        },
+    }
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        },
+    }
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        }
+    }
 
 
 import os
@@ -159,9 +192,20 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = "static/"
+STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
+
+# Soporte para Reverse Proxy HTTPS en producción (Coolify / Traefik / Nginx / Cloudflare)
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Cloudflare Turnstile CAPTCHA (Protección Anti-Bot y Anti-Spam para Registro y Denuncias)
+# Por defecto se configuran las claves oficiales de prueba de Cloudflare para funcionamiento inmediato
+TURNSTILE_SITEKEY = os.environ.get("TURNSTILE_SITEKEY", "1x00000000000000000000AA")
+TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "1x0000000000000000000000000000000AA")
+TURNSTILE_ENABLED = os.environ.get("TURNSTILE_ENABLED", "true").lower() in ("true", "1", "yes")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -172,11 +216,21 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "120/minute",
+        "anon": "60/minute",
         "user": "300/minute",
+        "sync": "1200/minute",
         "alert_create": "10/hour",
+        "alert_confirm": "30/minute",
+        "image_upload": "15/minute",
+        "login_attempt": "10/minute",
+        "gemini_user_minute": "3/minute",
+        "gemini_user_day": "25/day",
+        "gemini_ip": "6/minute",
+        "register": "10/hour",
     },
 }
+
+CORS_EXPOSE_HEADERS = ["ETag"]
 
 # CORS y CSRF (Configuración de dominios permitidos)
 cors_origins_env = os.environ.get("CORS_ALLOWED_ORIGINS", "")
@@ -196,4 +250,13 @@ if csrf_origins_env:
     CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in csrf_origins_env.split(",") if origin.strip()]
 elif cors_origins_env:
     CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
+
+# Blindaje de Seguridad en Producción (Cookies Seguras, Protección MIME y Frame Options)
+if not DEBUG:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_BROWSER_XSS_FILTER = True
+    X_FRAME_OPTIONS = "DENY"
+
 

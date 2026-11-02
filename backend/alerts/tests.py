@@ -1,4 +1,6 @@
+import os
 from django.test import TestCase
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 from rest_framework import status
@@ -87,26 +89,30 @@ class EcoAlertaTests(TestCase):
         self.assertEqual(len(response.data), 1)
 
     def test_citizen_registration_and_login(self):
-        """Validar el registro e inicio de sesión de un nuevo ciudadano."""
-        # Registro
+        """Validar el registro con Turnstile (is_staff=False garantizado) y login de autoridades."""
+        # Registro ciudadano seguro con test dummy token
         reg_resp = self.client.post('/api/auth/register/', {
             'username': 'nuevo_vecino',
             'email': 'vecino@pasco.gob.pe',
-            'password': 'claveSegura123!'
+            'password': 'claveSegura123!',
+            'turnstile_token': 'dummy_test_token'
         }, format='json')
         self.assertEqual(reg_resp.status_code, status.HTTP_201_CREATED)
         self.assertIn('token', reg_resp.data)
+        self.assertFalse(reg_resp.data['is_staff'])
 
-        # Login
+        # Login para autoridades / personal registrado sí debe funcionar
         login_resp = self.client.post('/api/auth/login/', {
-            'username': 'nuevo_vecino',
-            'password': 'claveSegura123!'
+            'username': 'autoridad1',
+            'password': 'password123'
         }, format='json')
         self.assertEqual(login_resp.status_code, status.HTTP_200_OK)
         self.assertIn('token', login_resp.data)
+        self.assertTrue(login_resp.data['is_staff'])
 
     def test_image_upload_extension_validation(self):
         """Validar rechazo de archivos que no son imágenes válidas."""
+        self.client.force_authenticate(user=self.citizen)
         invalid_file = SimpleUploadedFile("script.sh", b"echo hello", content_type="text/x-sh")
         response = self.client.post('/api/upload/', {'image': invalid_file}, format='multipart')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -114,6 +120,7 @@ class EcoAlertaTests(TestCase):
 
     def test_image_upload_compresses_and_converts_to_webp(self):
         """Validar que una imagen JPG es convertida y comprimida automáticamente a WebP."""
+        self.client.force_authenticate(user=self.citizen)
         import io
         from PIL import Image
         img = Image.new('RGB', (800, 600), color=(100, 150, 200))
@@ -210,5 +217,120 @@ class EcoAlertaTests(TestCase):
         self.assertEqual(ok_resp.status_code, status.HTTP_200_OK)
         self.assertTrue(ok_resp.data['has_gemini_key'])
         self.assertEqual(ok_resp.data['masked_key'], 'AIza...y123')
+
+    def test_ai_analysis_requires_authentication(self):
+        """Validar que usuarios anónimos no pueden invocar el analizador de IA."""
+        self.client.force_authenticate(user=None)
+        resp = self.client.post('/api/ai/analyze-evidence/', {'image_url': 'http://example.com/test.jpg'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_ai_analysis_pre_cache_prevents_gemini_reinvocation(self):
+        """Validar que si una imagen ya está analizada en caché, se responde con is_cached sin llamar a la API."""
+        from django.core.cache import cache
+        self.client.force_authenticate(user=self.citizen)
+
+        fake_analysis = {
+            'is_environmental_issue': True,
+            'is_minor_litter': False,
+            'category': 'basura',
+            'severity': 'critico',
+            'suggested_title': 'Botadero Clandestino Detectado',
+            'suggested_description': 'Acumulación masiva de residuos sólidos.',
+            'technical_analysis': 'Montículo de basura de gran volumen.',
+            'municipal_action': 'Envío de maquinaria pesada.'
+        }
+        test_url = '/media/uploads/test_evidencia_cached.webp'
+        clean_name = 'test_evidencia_cached.webp'
+
+        # Simular que el archivo local existe o está registrado en caché
+        cache.set(f"analysis_res_{test_url}", fake_analysis, timeout=3600)
+        cache.set(f"analysis_res_{clean_name}", fake_analysis, timeout=3600)
+
+        # Crear dummy en disco para que pase la verificación de archivo local
+        os.makedirs(os.path.join(settings.MEDIA_ROOT, 'uploads'), exist_ok=True)
+        local_path = os.path.join(settings.MEDIA_ROOT, 'uploads', clean_name)
+        with open(local_path, 'wb') as f:
+            f.write(b"RIFF" + b"X" * 500)
+
+        try:
+            resp = self.client.post('/api/ai/analyze-evidence/', {'image_url': test_url}, format='json')
+            self.assertEqual(resp.status_code, status.HTTP_200_OK)
+            self.assertTrue(resp.data.get('is_cached'))
+            self.assertEqual(resp.data['category'], 'basura')
+            self.assertEqual(resp.data['suggested_title'], 'Botadero Clandestino Detectado')
+        finally:
+            if os.path.exists(local_path):
+                os.remove(local_path)
+
+    def test_ai_analysis_concurrency_lock_rejects_simultaneous_requests(self):
+        """Validar que el candado atómico anti-concurrencia rechaza peticiones simultáneas del mismo usuario (HTTP 429)."""
+        from django.core.cache import cache
+        self.client.force_authenticate(user=self.citizen)
+
+        # Establecer el candado activo como si una petición estuviese en curso
+        lock_key = f"gemini_lock_{self.citizen.id}"
+        cache.set(lock_key, True, timeout=12)
+
+        # Crear archivo temporal
+        clean_name = 'test_lock_image.webp'
+        os.makedirs(os.path.join(settings.MEDIA_ROOT, 'uploads'), exist_ok=True)
+        local_path = os.path.join(settings.MEDIA_ROOT, 'uploads', clean_name)
+        with open(local_path, 'wb') as f:
+            f.write(b"RIFF" + b"Y" * 500)
+
+        try:
+            resp = self.client.post('/api/ai/analyze-evidence/', {'image_url': f'/media/uploads/{clean_name}'}, format='json')
+            self.assertEqual(resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+            self.assertIn('Ya tienes un análisis en proceso', resp.data['error'])
+        finally:
+            cache.delete(lock_key)
+            if os.path.exists(local_path):
+                os.remove(local_path)
+
+    def test_citizen_cannot_mass_assign_status_or_resolution(self):
+        """Validar que un ciudadano no puede inyectar status 'solved' ni resolución al crear una alerta."""
+        self.client.force_authenticate(user=self.citizen)
+        tampered_data = self.alert_data.copy()
+        tampered_data['status'] = 'solved'
+        tampered_data['resolution_comment'] = 'Resuelto fraudulentamente'
+        tampered_data['resolution_image_url'] = 'http://example.com/fake.jpg'
+
+        resp = self.client.post('/api/alerts/', tampered_data, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+
+        created_alert = Alert.objects.get(id=resp.data['id'])
+        self.assertEqual(created_alert.status, 'pending')
+        self.assertIsNone(created_alert.resolution_comment)
+        self.assertIsNone(created_alert.resolution_image_url)
+        self.assertIsNone(created_alert.resolved_at)
+
+    def test_citizen_cannot_self_confirm_own_alert(self):
+        """Validar que un usuario no puede inflar con (+1) su propio reporte ambiental."""
+        self.client.force_authenticate(user=self.citizen)
+        create_resp = self.client.post('/api/alerts/', self.alert_data, format='json')
+        self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
+        alert_id = create_resp.data['id']
+
+        # El mismo ciudadano intenta respaldarse a sí mismo
+        conf_resp = self.client.post(f'/api/alerts/{alert_id}/confirm/')
+        self.assertEqual(conf_resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('No puedes respaldar tu propia denuncia', str(conf_resp.data))
+
+    def test_logout_invalidates_token(self):
+        """Validar que el cierre de sesión elimina e invalida el token en el servidor."""
+        from rest_framework.authtoken.models import Token
+        token, _ = Token.objects.get_or_create(user=self.citizen)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {token.key}')
+
+        # Cerrar sesión en el backend
+        logout_resp = self.client.post('/api/auth/logout/')
+        self.assertEqual(logout_resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(Token.objects.filter(key=token.key).exists())
+
+        # Petición posterior con el mismo token debe ser rechazada (401)
+        followup_resp = self.client.get('/api/auth/profile/')
+        self.assertEqual(followup_resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
 
 

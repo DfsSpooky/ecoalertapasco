@@ -1,17 +1,44 @@
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
+from django.conf import settings
 from alerts.models import Alert
 from django.utils import timezone
 import datetime
 
 class Command(BaseCommand):
-    help = 'Poblar la base de datos con datos de prueba reales para Cerro de Pasco'
+    help = 'Carga datos iniciales de referencia para entornos de desarrollo local (protegido contra borrado en producción).'
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--force-reset',
+            action='store_true',
+            help='Elimina las alertas existentes antes de insertar los datos de prueba (SOLO desarrollo).',
+        )
+        parser.add_argument(
+            '--allow-production',
+            action='store_true',
+            help='Permite ejecutar el comando aunque DEBUG=False (solo si la tabla está vacía).',
+        )
 
     def handle(self, *args, **options):
-        # Limpiar base de datos
-        self.stdout.write('Limpiando base de datos de alertas...')
-        Alert.objects.all().delete()
-        
-        # Datos de prueba
+        if not settings.DEBUG and not options['allow_production']:
+            raise CommandError(
+                'SEGURIDAD DE PRODUCCIÓN: seed_data está bloqueado cuando DEBUG=False para proteger las denuncias ciudadanas reales.'
+            )
+
+        if options['force_reset']:
+            if not settings.DEBUG:
+                raise CommandError(
+                    'SEGURIDAD CRÍTICA: --force-reset está terminantemente prohibido cuando DEBUG=False.'
+                )
+            self.stdout.write(self.style.WARNING('Eliminando alertas locales por flag explícito --force-reset...'))
+            Alert.objects.all().delete()
+        elif Alert.objects.exists():
+            self.stdout.write(self.style.NOTICE(
+                f'Omitiendo seed_data: ya existen {Alert.objects.count()} alertas registradas en la base de datos.'
+            ))
+            return
+
+        # Datos de prueba para entorno local
         alerts_data = [
             {
                 'title': 'Relaves Mineros de Quiulacocha',
@@ -61,7 +88,6 @@ class Command(BaseCommand):
                 'status': 'solved',
                 'created_offset_days': 3,
                 'resolution_comment': 'Se instaló un sistema piloto de aireación por microburbujas y cal para neutralizar la acidez del agua.',
-                'resolution_image_url': 'https://images.unsplash.com/photo-1541888946425-d81bb19240f5?q=80&w=600&auto=format&fit=crop'
             },
             {
                 'title': 'Basural Acumulado en Av. El Minero',
@@ -111,7 +137,6 @@ class Command(BaseCommand):
                 'status': 'solved',
                 'created_offset_days': 10,
                 'resolution_comment': 'El personal de limpieza municipal retiró el desmonte con maquinaria pesada y multó al propietario.',
-                'resolution_image_url': 'https://images.unsplash.com/photo-1541888946425-d81bb19240f5?q=80&w=600&auto=format&fit=crop'
             },
             {
                 'title': 'Desborde de Aguas Servidas en Calle Mariátegui',

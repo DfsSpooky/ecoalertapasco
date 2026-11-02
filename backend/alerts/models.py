@@ -137,3 +137,12 @@ class SystemConfig(models.Model):
         val = cls.get_value('gemini_enabled', default='true').strip().lower()
         return val in ('true', '1', 'yes', 'si', 'on')
 
+    @classmethod
+    def set_value(cls, key: str, value: str, description: str = ''):
+        obj, _ = cls.objects.get_or_create(key=key)
+        obj.value = value
+        if description:
+            obj.description = description
+        obj.save()
+        return obj
+

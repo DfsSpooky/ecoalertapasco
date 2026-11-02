@@ -1,55 +1,27 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-*.swp
+# OS & Editors
 .DS_Store
-.atom/
-.build/
-.buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
-
-# IntelliJ related
 *.iml
 *.ipr
 *.iws
 .idea/
+.vscode/
+*.swp
+*.log
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# Rust / WebAssembly (Frontend)
+frontend-wasm/target/
+frontend-wasm/dist/
+target/
+dist/
+*.rs.bk
 
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
-.dart_tool/
-.flutter-plugins-dependencies
-.pub-cache/
-.pub/
-/build/
-/coverage/
-
-# Symbolication related
-app.*.symbols
-
-# Obfuscation related
-app.*.map.json
-
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
-
-# Python & Django
+# Python & Django (Backend)
 *.pyc
 __pycache__/
 *.py[cod]
 *$py.class
 backend/db.sqlite3
+backend/staticfiles/
 backend/media/uploads/*
 !backend/media/uploads/.gitkeep
 
@@ -57,6 +29,5 @@ backend/media/uploads/*
 .env
 *.env
 backend/.env
-!.env.example
+!*.env.example
 !backend/.env.example
-

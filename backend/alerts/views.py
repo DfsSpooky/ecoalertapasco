@@ -4,17 +4,23 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.authtoken.models import Token
-from rest_framework.throttling import UserRateThrottle
+from rest_framework.throttling import UserRateThrottle, SimpleRateThrottle
 from rest_framework.exceptions import ValidationError, PermissionDenied
 from django.contrib.auth import authenticate, get_user_model
 from django.utils import timezone
 from django.conf import settings
+from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 import os
 import math
 import io
 import re
+import hashlib
+import json
+import urllib.request
+import urllib.error
+import urllib.parse
 from PIL import Image, ImageOps
 
 from .models import Alert, WastePoint, SystemConfig
@@ -25,6 +31,154 @@ User = get_user_model()
 
 class AlertCreateRateThrottle(UserRateThrottle):
     scope = 'alert_create'
+
+
+class GeminiUserMinuteThrottle(UserRateThrottle):
+    scope = 'gemini_user_minute'
+
+
+class GeminiUserDayThrottle(UserRateThrottle):
+    scope = 'gemini_user_day'
+
+
+class GeminiIPThrottle(SimpleRateThrottle):
+    scope = 'gemini_ip'
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {'scope': self.scope, 'ident': self.get_ident(request)}
+
+
+class RegisterRateThrottle(SimpleRateThrottle):
+    scope = 'register'
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {'scope': self.scope, 'ident': self.get_ident(request)}
+
+
+class SyncRateThrottle(SimpleRateThrottle):
+    scope = 'sync'
+
+    def get_cache_key(self, request, view):
+        if request.user and request.user.is_authenticated:
+            ident = f"user_{request.user.pk}"
+        else:
+            ident = self.get_ident(request)
+        return self.cache_format % {'scope': self.scope, 'ident': ident}
+
+
+class AlertConfirmRateThrottle(UserRateThrottle):
+    scope = 'alert_confirm'
+
+
+class ImageUploadRateThrottle(UserRateThrottle):
+    scope = 'image_upload'
+
+
+class LoginRateThrottle(SimpleRateThrottle):
+    scope = 'login_attempt'
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {'scope': self.scope, 'ident': self.get_ident(request)}
+
+
+def compute_sync_etag(user) -> tuple[str, set[int]]:
+    """
+    Calcula una huella criptográfica ligera (ETag) del estado actual del mapa
+    (alertas, puntos de acopio y respaldos del usuario autenticado) en una fracción
+    de milisegundo sin hidratar modelos completos ni ejecutar serializadores.
+    """
+    h = hashlib.sha256()
+
+    alert_rows = Alert.objects.order_by('id').values_list(
+        'id',
+        'status',
+        'severity',
+        'category',
+        'district',
+        'confirmations_count',
+        'resolved_at',
+        'history_log',
+        'image_url',
+        'image_url_2',
+        'resolution_image_url',
+        'title',
+        'resolution_comment',
+    )
+    for row in alert_rows:
+        h.update(repr(row).encode('utf-8'))
+
+    waste_rows = WastePoint.objects.order_by('id').values_list(
+        'id',
+        'name',
+        'fill_level',
+        'type',
+        'truck_schedule',
+        'latitude',
+        'longitude',
+        'image_url',
+        'recommendations',
+    )
+    for w_row in waste_rows:
+        h.update(repr(w_row).encode('utf-8'))
+
+    confirmed_ids: set[int] = set()
+    if user and user.is_authenticated:
+        confirmed_ids = set(user.confirmed_alerts.values_list('id', flat=True))
+        h.update(f"u:{user.id}:{sorted(confirmed_ids)}".encode('utf-8'))
+    else:
+        h.update(b"u:anon")
+
+    return h.hexdigest()[:20], confirmed_ids
+
+
+class SyncMapDataView(APIView):
+    """
+    Endpoint unificado de Smart Polling condicional para producción (GET /api/sync/).
+    - Si el ETag del cliente coincide con el estado actual en BD, responde HTTP 304 Not Modified (0 bytes).
+    - Si hubo cambios (o es carga inicial), retorna alertas + puntos de acopio + nuevo ETag en un solo viaje HTTP.
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [SyncRateThrottle]
+
+    def get(self, request):
+        etag, confirmed_ids = compute_sync_etag(request.user)
+
+        client_etag = (
+            request.query_params.get('etag', '').strip(' "')
+            or request.headers.get('If-None-Match', '').strip(' "')
+        )
+        if client_etag and client_etag == etag:
+            return Response(
+                status=status.HTTP_304_NOT_MODIFIED,
+                headers={
+                    'ETag': f'"{etag}"',
+                    'Cache-Control': 'no-cache, must-revalidate',
+                },
+            )
+
+        alerts_qs = Alert.objects.select_related('reported_by').order_by('-created_at')
+        waste_qs = WastePoint.objects.all().order_by('id')
+
+        alerts_data = AlertSerializer(
+            alerts_qs,
+            many=True,
+            context={'request': request, 'confirmed_alert_ids': confirmed_ids},
+        ).data
+        waste_data = WastePointSerializer(waste_qs, many=True).data
+
+        return Response(
+            {
+                'etag': etag,
+                'alerts': alerts_data,
+                'waste_points': waste_data,
+                'server_time': timezone.now().isoformat(),
+            },
+            status=status.HTTP_200_OK,
+            headers={
+                'ETag': f'"{etag}"',
+                'Cache-Control': 'no-cache, must-revalidate',
+            },
+        )
 
 
 def calculate_distance_meters(lat1, lon1, lat2, lon2):
@@ -43,13 +197,15 @@ def calculate_distance_meters(lat1, lon1, lat2, lon2):
 
 
 class AlertViewSet(viewsets.ModelViewSet):
-    queryset = Alert.objects.all().order_by('-created_at')
+    queryset = Alert.objects.select_related('reported_by').prefetch_related('confirmed_by').order_by('-created_at')
     serializer_class = AlertSerializer
 
     def get_permissions(self):
-        # Es OBLIGATORIO haber iniciado sesión para crear o modificar alertas
-        if self.action in ['create', 'partial_update', 'update', 'destroy']:
+        # Crear alertas requiere ciudadano autenticado; modificar o eliminar requiere autoridad municipal (is_staff)
+        if self.action == 'create':
             return [permissions.IsAuthenticated()]
+        if self.action in ['partial_update', 'update', 'destroy']:
+            return [permissions.IsAdminUser()]
         return [permissions.AllowAny()]
 
     def get_throttles(self):
@@ -100,13 +256,45 @@ class AlertViewSet(viewsets.ModelViewSet):
                         'detail': f"Ya existe un reporte similar en esta zona ('{existing.title}'). Evitemos duplicar incidentes."
                     })
 
+        # 3. Validación estricta de evidencia fotográfica ambiental (Filtro Anti-Spam / No Ambiental)
+        img1 = serializer.validated_data.get('image_url')
+        img2 = serializer.validated_data.get('image_url_2')
+        for img in [img1, img2]:
+            if img:
+                clean_key = img.split('uploads/')[-1] if 'uploads/' in img else img.strip()
+                cached_analysis = cache.get(f"analysis_res_{img.strip()}") or cache.get(f"analysis_res_{clean_key}")
+                if cached_analysis and isinstance(cached_analysis, dict):
+                    if cached_analysis.get('is_environmental_issue') is False:
+                        if cached_analysis.get('is_minor_litter') or cached_analysis.get('rejection_reason') == 'minor_litter':
+                            raise ValidationError({
+                                'detail': 'Reporte bloqueado: La evidencia fotográfica corresponde a basura menor cotidiana. El camión recolector municipal pasa habitualmente según su cronograma. EcoAlerta está reservado exclusivamente para focos y emergencias ambientales graves.'
+                            })
+                        else:
+                            tech_msg = cached_analysis.get('technical_analysis') or 'La evidencia no muestra un problema de contaminación ambiental en Cerro de Pasco.'
+                            raise ValidationError({
+                                'detail': f'Reporte rechazado por filtro ambiental: {tech_msg}'
+                            })
+
         user_str = user.username if user.is_authenticated else "Ciudadano"
         now_str = timezone.now().strftime("%Y-%m-%d %H:%M")
         history_log = f"{now_str}|Reportado por {user_str}"
-        serializer.save(
-            reported_by=user if user.is_authenticated else None,
-            history_log=history_log
-        )
+
+        # Blindaje contra Mass Assignment / Escalada de privilegios:
+        # Los usuarios no-staff NO pueden forzar status 'solved'/'verified' ni adjuntar resoluciones al crear.
+        if not user.is_staff:
+            serializer.save(
+                reported_by=user if user.is_authenticated else None,
+                status='pending',
+                resolution_comment=None,
+                resolution_image_url=None,
+                resolved_at=None,
+                history_log=history_log
+            )
+        else:
+            serializer.save(
+                reported_by=user if user.is_authenticated else None,
+                history_log=history_log
+            )
 
     def perform_update(self, serializer):
         new_status = serializer.validated_data.get('status')
@@ -121,53 +309,67 @@ class AlertViewSet(viewsets.ModelViewSet):
         old_status = instance.status
         old_district = instance.district
 
-        # Guardar cambios
-        new_instance = serializer.save()
-        
-        # Sincronizar fecha de resolución
-        if new_instance.status == 'solved' and not new_instance.resolved_at:
-            new_instance.resolved_at = timezone.now()
-            new_instance.save()
-        elif new_instance.status != 'solved' and new_instance.resolved_at:
-            new_instance.resolved_at = None
-            new_instance.save()
+        target_status = serializer.validated_data.get('status', old_status)
+        target_district = serializer.validated_data.get('district', old_district)
+        target_res_comment = serializer.validated_data.get('resolution_comment', instance.resolution_comment)
+
+        # Sincronizar fecha de resolución en una sola escritura atómica
+        if target_status == 'solved' and not instance.resolved_at:
+            resolved_at_val = timezone.now()
+        elif target_status != 'solved' and instance.resolved_at:
+            resolved_at_val = None
+        else:
+            resolved_at_val = instance.resolved_at
 
         # Bitácora
         log_entries = []
         user_str = self.request.user.username if self.request.user.is_authenticated else "Autoridad"
         now_str = timezone.now().strftime("%Y-%m-%d %H:%M")
 
-        if old_status != new_instance.status:
-            if new_instance.status == 'solved':
-                log_entries.append(f"{now_str}|Solucionado por {user_str}. Evidencia: {new_instance.resolution_comment or 'Conforme'}")
-            elif new_instance.status == 'dismissed':
-                log_entries.append(f"{now_str}|Descartado por {user_str}. Motivo: {new_instance.resolution_comment or 'No aplicable'}")
+        if old_status != target_status:
+            if target_status == 'solved':
+                log_entries.append(f"{now_str}|Solucionado por {user_str}. Evidencia: {target_res_comment or 'Conforme'}")
+            elif target_status == 'dismissed':
+                log_entries.append(f"{now_str}|Descartado por {user_str}. Motivo: {target_res_comment or 'No aplicable'}")
             else:
-                log_entries.append(f"{now_str}|Estado actualizado a {new_instance.get_status_display()} por {user_str}")
+                status_label = dict(Alert.STATUS_CHOICES).get(target_status, target_status)
+                log_entries.append(f"{now_str}|Estado actualizado a {status_label} por {user_str}")
 
-        if old_district != new_instance.district:
-            log_entries.append(f"{now_str}|Transferido de {old_district} a {new_instance.district} por {user_str}")
+        if old_district != target_district:
+            log_entries.append(f"{now_str}|Transferido de {old_district} a {target_district} por {user_str}")
 
+        current_log = instance.history_log or ""
         if log_entries:
-            current_log = new_instance.history_log or ""
-            new_log = current_log + "\n" + "\n".join(log_entries) if current_log else "\n".join(log_entries)
-            new_instance.history_log = new_log
-            new_instance.save()
+            final_log = current_log + "\n" + "\n".join(log_entries) if current_log else "\n".join(log_entries)
+        else:
+            final_log = current_log
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+        serializer.save(resolved_at=resolved_at_val, history_log=final_log)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated], throttle_classes=[AlertConfirmRateThrottle])
     def confirm(self, request, pk=None):
         """Permite a ciudadanos confirmar o apoyar un reporte existente (+1)."""
-        alert = self.get_object()
-        user = request.user
-        if alert.confirmed_by.filter(id=user.id).exists():
-            alert.confirmed_by.remove(user)
-            alert.confirmations_count = max(0, alert.confirmations_count - 1)
-            confirmed = False
-        else:
-            alert.confirmed_by.add(user)
-            alert.confirmations_count += 1
-            confirmed = True
-        alert.save(update_fields=['confirmations_count'])
+        from django.db import transaction
+        with transaction.atomic():
+            alert = self.get_object()
+            user = request.user
+
+            # Prevención de Auto-respaldo / Manipulación ciudadana:
+            # Un usuario no puede confirmar (+1) sus propias denuncias a menos que sea staff realizando verificación.
+            if alert.reported_by_id and alert.reported_by_id == user.id and not user.is_staff:
+                raise ValidationError({
+                    'detail': 'No puedes respaldar tu propia denuncia ambiental.'
+                })
+
+            if alert.confirmed_by.filter(id=user.id).exists():
+                alert.confirmed_by.remove(user)
+                alert.confirmations_count = max(0, alert.confirmations_count - 1)
+                confirmed = False
+            else:
+                alert.confirmed_by.add(user)
+                alert.confirmations_count += 1
+                confirmed = True
+            alert.save(update_fields=['confirmations_count'])
         return Response({
             'id': alert.id,
             'confirmed': confirmed,
@@ -216,14 +418,25 @@ class WastePointViewSet(viewsets.ModelViewSet):
     serializer_class = WastePointSerializer
 
     def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+        if self.action in ['create', 'update', 'destroy']:
             return [permissions.IsAdminUser()]
+        if self.action == 'partial_update':
+            return [permissions.IsAuthenticated()]
         return [permissions.AllowAny()]
+
+    def perform_update(self, serializer):
+        # Ciudadanos autenticados solo pueden reportar el nivel de llenado actual del contenedor
+        if not self.request.user.is_staff:
+            disallowed_fields = set(serializer.validated_data.keys()) - {'fill_level'}
+            if disallowed_fields:
+                raise PermissionDenied("Solo el personal municipal autorizado puede editar los datos estructurales del punto de acopio.")
+        serializer.save()
 
 
 class LoginView(APIView):
     authentication_classes = []
     permission_classes = []
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         username = request.data.get('username')
@@ -243,35 +456,283 @@ class LoginView(APIView):
         return Response({'error': 'Credenciales inválidas. Verifica tu usuario y contraseña.'}, status=status.HTTP_401_UNAUTHORIZED)
 
 
-class RegisterView(APIView):
-    authentication_classes = []
-    permission_classes = []
+class LogoutView(APIView):
+    """Invalida y elimina el token de autenticación del usuario en el servidor."""
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        username = request.data.get('username')
-        email = request.data.get('email')
-        password = request.data.get('password')
+        if hasattr(request.user, 'auth_token') and request.user.auth_token:
+            request.user.auth_token.delete()
+        return Response({'detail': 'Sesión cerrada exitosamente en el servidor.'}, status=status.HTTP_200_OK)
+
+
+def get_client_ip(request):
+    """Obtiene la dirección IP real del cliente considerando reverse proxies (Cloudflare, Nginx, Traefik)."""
+    cf_connecting_ip = request.META.get('HTTP_CF_CONNECTING_IP')
+    if cf_connecting_ip:
+        return cf_connecting_ip.strip()
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        return x_forwarded_for.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
+
+
+def verify_turnstile_token(token: str, remote_ip: str = None) -> tuple[bool, str]:
+    """
+    Verifica criptográficamente un token de Cloudflare Turnstile con el endpoint de siteverify.
+    Retorna (es_valido, mensaje_error).
+    """
+    secret = SystemConfig.get_value(
+        'TURNSTILE_SECRET_KEY',
+        os.environ.get('TURNSTILE_SECRET_KEY', '1x0000000000000000000000000000000AA')
+    ).strip()
+
+    # Si Turnstile está desactivado explícitamente en variables o SystemConfig
+    turnstile_enabled = SystemConfig.get_value(
+        'TURNSTILE_ENABLED',
+        os.environ.get('TURNSTILE_ENABLED', 'true')
+    ).strip().lower() in ('true', '1', 'yes')
+
+    if not turnstile_enabled:
+        return True, ""
+
+    if not token or not token.strip():
+        return False, "Por favor completa la verificación de seguridad anti-bot (Cloudflare Turnstile)."
+
+    token_clean = token.strip()
+
+    # Si estamos en modo de desarrollo con la dummy key oficial de Cloudflare y el token es de prueba
+    if secret == '1x0000000000000000000000000000000AA' and token_clean in ('dummy', 'test', '1x00000000000000000000AA'):
+        return True, ""
+
+    url = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+    payload = {
+        'secret': secret,
+        'response': token_clean,
+    }
+    if remote_ip:
+        payload['remoteip'] = remote_ip
+
+    data = urllib.parse.urlencode(payload).encode('utf-8')
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'EcoAlerta-Platform/1.0'
+        }
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=7) as resp:
+            if resp.status == 200:
+                result = json.loads(resp.read().decode('utf-8'))
+                if result.get('success'):
+                    return True, ""
+                error_codes = result.get('error-codes', [])
+                err_detail = ", ".join(error_codes) if error_codes else "desafío no superado"
+                return False, f"Validación de seguridad Cloudflare Turnstile fallida ({err_detail})."
+            else:
+                return False, f"Error del servidor de Cloudflare ({resp.status})."
+    except Exception as e:
+        # En caso de timeout de red o error de conexión con Cloudflare
+        # Si la clave es la dummy de desarrollo, permitir pasar para no bloquear desarrollo offline
+        if secret == '1x0000000000000000000000000000000AA':
+            return True, ""
+        return False, f"No se pudo contactar con el servicio anti-bot de Cloudflare: {e}"
+
+
+class RegisterView(APIView):
+    """
+    Registro seguro de ciudadanos con protección anti-bot Cloudflare Turnstile.
+    Las cuentas ciudadanas creadas aquí SIEMPRE tienen is_staff=False (rol ciudadano vigilante).
+    """
+    authentication_classes = []
+    permission_classes = []
+    throttle_classes = [RegisterRateThrottle]
+
+    def post(self, request):
+        turnstile_token = str(request.data.get('turnstile_token') or '').strip()
+        client_ip = get_client_ip(request)
+        is_valid, err_msg = verify_turnstile_token(turnstile_token, remote_ip=client_ip)
+        if not is_valid:
+            return Response({'error': err_msg}, status=status.HTTP_400_BAD_REQUEST)
+
+        username = str(request.data.get('username') or '').strip()
+        email = str(request.data.get('email') or '').strip()
+        password = str(request.data.get('password') or '')
 
         if not username or not email or not password:
             return Response({'error': 'Por favor completa todos los campos obligatorios.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if User.objects.filter(username=username).exists():
+        if User.objects.filter(username__iexact=username).exists():
             return Response({'error': 'El nombre de usuario ya está registrado.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if User.objects.filter(email=email).exists():
+        if User.objects.filter(email__iexact=email).exists():
             return Response({'error': 'El correo electrónico ya está en uso.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            user = User.objects.create_user(username=username, email=email, password=password)
+            # Creación estricta de ciudadano sin privilegios administrativos (is_staff=False)
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+                is_staff=False,
+                is_superuser=False
+            )
             token, _ = Token.objects.get_or_create(user=user)
             return Response({
                 'token': token.key,
                 'username': user.username,
                 'email': user.email,
-                'is_staff': user.is_staff
+                'is_staff': False
             }, status=status.HTTP_201_CREATED)
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class GoogleAuthView(APIView):
+    """
+    Autenticación y registro seguro con Google Identity Services (GIS / OAuth 2.0).
+    Verifica el JWT id_token con los servidores seguros de Google, previene spam
+    y crea o vincula la cuenta del ciudadano en EcoAlerta.
+    """
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        credential = (request.data.get('credential') or request.data.get('id_token') or '').strip()
+        if not credential:
+            return Response({'error': 'Falta el token de credenciales de Google.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        google_user = None
+
+        try:
+            # Verificación criptográfica con los servidores de Google Identity
+            req_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={credential}"
+            req = urllib.request.Request(
+                req_url,
+                headers={'User-Agent': 'EcoAlerta-Platform/1.0'}
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode('utf-8'))
+
+                    # Validar emisor de Google
+                    iss = data.get('iss', '')
+                    if iss not in ('accounts.google.com', 'https://accounts.google.com'):
+                        return Response({'error': 'Emisor de credencial no reconocido por Google.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+                    # Validar Client ID obligatorio en el sistema (Previene suplantación de identidad por tokens de otras apps)
+                    expected_aud = SystemConfig.get_value('GOOGLE_CLIENT_ID', os.environ.get('GOOGLE_CLIENT_ID', '')).strip()
+                    if not expected_aud:
+                        return Response({
+                            'error': 'El inicio de sesión con Google no está configurado aún en el servidor (falta GOOGLE_CLIENT_ID).'
+                        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+                    if data.get('aud') != expected_aud:
+                        return Response({'error': 'El token de Google no corresponde al Client ID de EcoAlerta.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+                    # Validar que el correo esté verificado por Google
+                    email_verified = data.get('email_verified')
+                    if str(email_verified).lower() not in ('true', '1'):
+                        return Response({'error': 'La cuenta de Google debe tener un correo electrónico verificado.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                    google_user = data
+                else:
+                    return Response({'error': 'No se pudo verificar la credencial con Google.'}, status=status.HTTP_401_UNAUTHORIZED)
+        except urllib.error.HTTPError as e:
+            err_detail = "Token de Google inválido o expirado."
+            try:
+                err_json = json.loads(e.read().decode('utf-8'))
+                if 'error_description' in err_json:
+                    err_detail = f"Google: {err_json['error_description']}"
+            except Exception:
+                pass
+            return Response({'error': err_detail}, status=status.HTTP_401_UNAUTHORIZED)
+        except Exception as e:
+            return Response({'error': f'Error de conexión con Google: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if not google_user or not google_user.get('email'):
+            return Response({'error': 'No se pudo extraer la información del perfil de Google.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        email = google_user['email'].strip().lower()
+        full_name = google_user.get('name', '').strip()
+        picture = google_user.get('picture', '')
+
+        # Buscar si ya existe un usuario con este correo
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            # Generar username amigable y único
+            base_username = email.split('@')[0]
+            base_username = re.sub(r'[^a-zA-Z0-9_]', '_', base_username)
+            if not base_username:
+                base_username = f"google_user_{google_user.get('sub', '')[:8]}"
+
+            candidate_username = base_username
+            counter = 1
+            while User.objects.filter(username=candidate_username).exists():
+                candidate_username = f"{base_username}_{counter}"
+                counter += 1
+
+            first_name = full_name.split()[0] if full_name else ''
+            last_name = " ".join(full_name.split()[1:]) if len(full_name.split()) > 1 else ''
+
+            user = User.objects.create_user(
+                username=candidate_username,
+                email=email,
+                first_name=first_name,
+                last_name=last_name
+            )
+            user.set_unusable_password()
+            user.save()
+        else:
+            # Actualizar nombres si no los tenía
+            if full_name and not user.first_name and not user.last_name:
+                parts = full_name.split()
+                user.first_name = parts[0]
+                if len(parts) > 1:
+                    user.last_name = " ".join(parts[1:])
+                user.save()
+
+        # Emitir o recuperar token de sesión DRF
+        token, _ = Token.objects.get_or_create(user=user)
+
+        return Response({
+            'token': token.key,
+            'username': user.username,
+            'email': user.email,
+            'is_staff': user.is_staff,
+            'full_name': user.get_full_name() or user.username,
+            'photo_url': picture
+        }, status=status.HTTP_200_OK)
+
+
+class GoogleAuthConfigView(APIView):
+    """
+    Retorna la configuración pública para el botón de Google Sign-In y Cloudflare Turnstile.
+    """
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request):
+        client_id = SystemConfig.get_value('GOOGLE_CLIENT_ID', os.environ.get('GOOGLE_CLIENT_ID', '')).strip()
+        turnstile_sitekey = SystemConfig.get_value(
+            'TURNSTILE_SITEKEY',
+            os.environ.get('TURNSTILE_SITEKEY', '1x00000000000000000000AA')
+        ).strip()
+        turnstile_enabled = SystemConfig.get_value(
+            'TURNSTILE_ENABLED',
+            os.environ.get('TURNSTILE_ENABLED', 'true')
+        ).strip().lower() in ('true', '1', 'yes')
+
+        return Response({
+            'client_id': client_id,
+            'is_configured': bool(client_id),
+            'app_name': 'EcoAlerta Cerro de Pasco',
+            'turnstile_sitekey': turnstile_sitekey,
+            'turnstile_enabled': turnstile_enabled,
+        })
 
 
 def compress_and_convert_to_webp(file_obj, max_dimension=1600, quality=80):
@@ -300,8 +761,8 @@ def compress_and_convert_to_webp(file_obj, max_dimension=1600, quality=80):
 
 
 class ImageUploadView(APIView):
-    authentication_classes = []
-    permission_classes = []
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ImageUploadRateThrottle]
     parser_classes = [MultiPartParser, FormParser]
 
     ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif'}
@@ -604,11 +1065,8 @@ def discover_and_verify_gemini_models(api_key: str, requested_model: str = None)
 
 
 class SystemSettingsView(APIView):
-    """Permite consultar y guardar la API Key y el modelo de Gemini desde el panel."""
-    def get_permissions(self):
-        if self.request.method == 'GET':
-            return [permissions.AllowAny()]
-        return [permissions.IsAdminUser()]
+    """Permite consultar y guardar la API Key y el modelo de Gemini desde el panel de autoridades."""
+    permission_classes = [permissions.IsAdminUser]
 
     def get(self, request):
         key = SystemConfig.get_value('gemini_api_key')
@@ -618,21 +1076,37 @@ class SystemSettingsView(APIView):
             masked = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "********"
         current_model = SystemConfig.get_value('gemini_model', default='gemini-1.5-flash')
         gemini_enabled = SystemConfig.is_gemini_enabled()
+        google_client_id = SystemConfig.get_value('GOOGLE_CLIENT_ID', os.environ.get('GOOGLE_CLIENT_ID', '')).strip()
+        turnstile_sitekey = SystemConfig.get_value('TURNSTILE_SITEKEY', os.environ.get('TURNSTILE_SITEKEY', '1x00000000000000000000AA')).strip()
+        turnstile_secret = SystemConfig.get_value('TURNSTILE_SECRET_KEY', os.environ.get('TURNSTILE_SECRET_KEY', '1x0000000000000000000000000000000AA')).strip()
+        turnstile_enabled = SystemConfig.get_value('TURNSTILE_ENABLED', os.environ.get('TURNSTILE_ENABLED', 'true')).strip().lower() in ('true', '1', 'yes')
+        masked_turnstile_secret = f"{turnstile_secret[:4]}...{turnstile_secret[-4:]}" if len(turnstile_secret) > 8 else "********"
+
         return Response({
             'has_gemini_key': has_key,
             'masked_key': masked,
             'selected_model': current_model,
             'available_models': AVAILABLE_GEMINI_MODELS,
             'gemini_enabled': gemini_enabled,
+            'google_client_id': google_client_id,
+            'google_auth_configured': bool(google_client_id),
+            'turnstile_sitekey': turnstile_sitekey,
+            'turnstile_secret_masked': masked_turnstile_secret,
+            'has_turnstile_secret': bool(turnstile_secret),
+            'turnstile_enabled': turnstile_enabled,
         })
 
     def post(self, request):
         gemini_api_key = request.data.get('gemini_api_key', '').strip()
         gemini_model = request.data.get('gemini_model', '').strip()
         has_gemini_enabled = 'gemini_enabled' in request.data
+        has_google_client_id = 'google_client_id' in request.data
+        has_turnstile_sitekey = 'turnstile_sitekey' in request.data
+        has_turnstile_secret = 'turnstile_secret_key' in request.data
+        has_turnstile_enabled = 'turnstile_enabled' in request.data
 
-        if not gemini_api_key and not gemini_model and not has_gemini_enabled:
-            return Response({'error': 'Debes enviar al menos la clave de API, el modelo o el estado de activación a configurar.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not gemini_api_key and not gemini_model and not has_gemini_enabled and not has_google_client_id and not has_turnstile_sitekey and not has_turnstile_secret and not has_turnstile_enabled:
+            return Response({'error': 'Debes enviar al menos un parámetro de configuración a actualizar.'}, status=status.HTTP_400_BAD_REQUEST)
 
         if has_gemini_enabled:
             raw_enabled = request.data.get('gemini_enabled')
@@ -654,17 +1128,56 @@ class SystemSettingsView(APIView):
                 defaults={'value': gemini_model, 'description': 'Modelo activo de Google Gemini'}
             )
 
+        if has_google_client_id:
+            val_google = request.data.get('google_client_id', '').strip()
+            SystemConfig.objects.update_or_create(
+                key='GOOGLE_CLIENT_ID',
+                defaults={'value': val_google, 'description': 'Google OAuth 2.0 Web Client ID para Google Sign-In'}
+            )
+
+        if has_turnstile_sitekey:
+            val_tk = request.data.get('turnstile_sitekey', '').strip()
+            SystemConfig.objects.update_or_create(
+                key='TURNSTILE_SITEKEY',
+                defaults={'value': val_tk, 'description': 'Cloudflare Turnstile Public Site Key'}
+            )
+
+        if has_turnstile_secret:
+            val_sec = request.data.get('turnstile_secret_key', '').strip()
+            if val_sec:
+                SystemConfig.objects.update_or_create(
+                    key='TURNSTILE_SECRET_KEY',
+                    defaults={'value': val_sec, 'description': 'Cloudflare Turnstile Secret Key (Siteverify)'}
+                )
+
+        if has_turnstile_enabled:
+            raw_t_enabled = request.data.get('turnstile_enabled')
+            t_enabled_str = 'true' if str(raw_t_enabled).lower() in ('true', '1', 'yes', 'si') else 'false'
+            SystemConfig.objects.update_or_create(
+                key='TURNSTILE_ENABLED',
+                defaults={'value': t_enabled_str, 'description': 'Activar protección anti-bot Cloudflare Turnstile'}
+            )
+
         current_key = SystemConfig.get_value('gemini_api_key')
         current_model = SystemConfig.get_value('gemini_model', default='gemini-1.5-flash')
         gemini_enabled = SystemConfig.is_gemini_enabled()
+        google_client_id = SystemConfig.get_value('GOOGLE_CLIENT_ID', os.environ.get('GOOGLE_CLIENT_ID', '')).strip()
+        turnstile_sitekey = SystemConfig.get_value('TURNSTILE_SITEKEY', os.environ.get('TURNSTILE_SITEKEY', '1x00000000000000000000AA')).strip()
+        turnstile_secret = SystemConfig.get_value('TURNSTILE_SECRET_KEY', os.environ.get('TURNSTILE_SECRET_KEY', '1x0000000000000000000000000000000AA')).strip()
+        turnstile_enabled = SystemConfig.get_value('TURNSTILE_ENABLED', os.environ.get('TURNSTILE_ENABLED', 'true')).strip().lower() in ('true', '1', 'yes')
+
         return Response({
             'success': True,
-            'message': 'Configuración de Gemini actualizada correctamente.',
+            'message': 'Configuración del sistema actualizada correctamente.',
             'has_gemini_key': bool(current_key),
             'masked_key': f"{current_key[:4]}...{current_key[-4:]}" if len(current_key) > 8 else ("********" if current_key else ""),
             'selected_model': current_model,
             'available_models': AVAILABLE_GEMINI_MODELS,
             'gemini_enabled': gemini_enabled,
+            'google_client_id': google_client_id,
+            'google_auth_configured': bool(google_client_id),
+            'turnstile_sitekey': turnstile_sitekey,
+            'turnstile_enabled': turnstile_enabled,
         })
 
 
@@ -705,8 +1218,15 @@ class TestGeminiView(APIView):
 
 
 class AnalyzeEvidenceAIView(APIView):
-    """Analiza una foto de evidencia ambiental usando Gemini Multimodal."""
+    """
+    Analiza una foto de evidencia ambiental usando Gemini Multimodal con blindaje anti-abuso:
+    - Throttling multinivel por usuario (minuto/día) e IP.
+    - Pre-caché por Hash criptográfico (SHA-256) y URL para evitar re-análisis idénticos.
+    - Candado atómico anti-concurrencia (cache.add) para prevenir condiciones de carrera.
+    - Protección anti-SSRF y límite de peso en descarga de imágenes remotas.
+    """
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [GeminiUserMinuteThrottle, GeminiUserDayThrottle, GeminiIPThrottle]
 
     def post(self, request):
         if not SystemConfig.is_gemini_enabled():
@@ -715,31 +1235,21 @@ class AnalyzeEvidenceAIView(APIView):
                 'is_gemini_enabled': False
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        gemini_api_key = SystemConfig.get_value('gemini_api_key')
-        if not gemini_api_key:
-            return Response({
-                'error': 'La API Key de Gemini no está configurada aún en el servidor. El administrador puede activarla en el Panel de Autoridades > Ajustes de IA.'
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        # Protección anti-abuso de cuota gratuita de Gemini (cooldown de 3 segundos por usuario)
-        from django.core.cache import cache
-        user_id = request.user.id if request.user.is_authenticated else 'anon'
-        cooldown_key = f"gemini_analysis_cooldown_{user_id}"
-        if cache.get(cooldown_key):
-            return Response({
-                'error': 'Por favor espera unos segundos antes de analizar otra imagen para proteger la cuota de la IA.'
-            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
-
         import base64
         import httpx
         import json
         import re
+        import socket
+        import ipaddress
+        from urllib.parse import urlparse
 
         image_bytes = None
         mime_type = 'image/jpeg'
 
         file_obj = request.FILES.get('image')
         if file_obj:
+            if file_obj.size > 20 * 1024 * 1024:
+                return Response({'error': 'El archivo excede el tamaño máximo permitido (20MB).'}, status=status.HTTP_400_BAD_REQUEST)
             try:
                 image_bytes, mime_type = compress_and_convert_to_webp(file_obj)
             except Exception:
@@ -748,8 +1258,9 @@ class AnalyzeEvidenceAIView(APIView):
         else:
             image_url = request.data.get('image_url')
             if image_url:
+                image_url_str = str(image_url).strip()
                 try:
-                    url_lower = image_url.lower()
+                    url_lower = image_url_str.lower()
                     if url_lower.endswith('.webp'):
                         mime_type = 'image/webp'
                     elif url_lower.endswith('.png'):
@@ -757,22 +1268,88 @@ class AnalyzeEvidenceAIView(APIView):
                     elif url_lower.endswith('.jpg') or url_lower.endswith('.jpeg'):
                         mime_type = 'image/jpeg'
 
-                    # Si es archivo guardado localmente en MEDIA_ROOT
-                    if 'uploads/' in image_url:
-                        clean_path = image_url.split('uploads/')[-1]
-                        local_path = os.path.join(settings.MEDIA_ROOT, 'uploads', clean_path)
-                        if os.path.exists(local_path):
-                            with open(local_path, 'rb') as f:
-                                image_bytes = f.read()
-                    if image_bytes is None and image_url.startswith('http'):
-                        r = httpx.get(image_url, timeout=10.0)
-                        if r.status_code == 200:
-                            image_bytes = r.content
+                    # 1. Archivo local guardado en MEDIA_ROOT (sin directory traversal)
+                    if 'uploads/' in image_url_str or image_url_str.startswith(settings.MEDIA_URL):
+                        clean_filename = os.path.basename(image_url_str.split('?')[0])
+                        if clean_filename and not clean_filename.startswith('.'):
+                            local_path = os.path.join(settings.MEDIA_ROOT, 'uploads', clean_filename)
+                            if os.path.exists(local_path):
+                                with open(local_path, 'rb') as f:
+                                    image_bytes = f.read()
+
+                    # 2. Descarga remota segura con protección anti-SSRF
+                    if image_bytes is None and (image_url_str.startswith('http://') or image_url_str.startswith('https://')):
+                        parsed_url = urlparse(image_url_str)
+                        hostname = parsed_url.hostname
+                        is_safe_host = False
+                        if hostname:
+                            try:
+                                ip_str = socket.gethostbyname(hostname)
+                                ip_obj = ipaddress.ip_address(ip_str)
+                                if not (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved or ip_obj.is_multicast):
+                                    is_safe_host = True
+                            except Exception:
+                                is_safe_host = False
+
+                        if is_safe_host:
+                            with httpx.Client(timeout=8.0) as client:
+                                with client.stream("GET", image_url_str) as response:
+                                    if response.status_code == 200:
+                                        content_len = response.headers.get("Content-Length")
+                                        if content_len and int(content_len) > 15 * 1024 * 1024:
+                                            return Response({'error': 'La imagen remota supera el tamaño máximo de 15MB.'}, status=status.HTTP_400_BAD_REQUEST)
+                                        chunks = []
+                                        downloaded = 0
+                                        for chunk in response.iter_bytes(chunk_size=65536):
+                                            downloaded += len(chunk)
+                                            if downloaded > 15 * 1024 * 1024:
+                                                return Response({'error': 'La imagen remota supera el tamaño máximo de 15MB.'}, status=status.HTTP_400_BAD_REQUEST)
+                                            chunks.append(chunk)
+                                        image_bytes = b"".join(chunks)
                 except Exception:
                     pass
 
-        if not image_bytes:
+        if not image_bytes or len(image_bytes) < 100:
             return Response({'error': 'No se recibió ninguna imagen válida para analizar.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # -------------------------------------------------------------
+        # CAPA 1: CACHÉ PRE-LLM (Por Hash SHA-256 y por URL)
+        # Si la imagen ya fue analizada antes, responder de inmediato
+        # con el peritaje guardado sin consumir cuota ni activar cooldowns.
+        # -------------------------------------------------------------
+        image_hash = hashlib.sha256(image_bytes).hexdigest()
+        cache_hash_key = f"analysis_hash_{image_hash}"
+        cached_result = cache.get(cache_hash_key)
+
+        image_url = request.data.get('image_url')
+        if not cached_result and image_url:
+            clean_url = str(image_url).split('uploads/')[-1] if 'uploads/' in str(image_url) else str(image_url).strip()
+            cached_result = cache.get(f"analysis_res_{str(image_url).strip()}") or cache.get(f"analysis_res_{clean_url}")
+
+        if cached_result and isinstance(cached_result, dict):
+            cached_payload = dict(cached_result)
+            cached_payload['is_cached'] = True
+            return Response(cached_payload, status=status.HTTP_200_OK)
+
+        # -------------------------------------------------------------
+        # CAPA 2: CANDADO ATÓMICO ANTI-CONCURRENCIA (12 segundos)
+        # cache.add() solo tiene éxito para la primera petición.
+        # Evita que 20 llamadas paralelas sobrepasen el cooldown.
+        # -------------------------------------------------------------
+        user_id = request.user.id if request.user.is_authenticated else 'anon'
+        cooldown_key = f"gemini_lock_{user_id}"
+        lock_acquired = cache.add(cooldown_key, True, timeout=12)
+        if not lock_acquired:
+            return Response({
+                'error': 'Ya tienes un análisis en proceso o debes esperar unos segundos antes de solicitar otro peritaje de IA para proteger la cuota.'
+            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        gemini_api_key = SystemConfig.get_value('gemini_api_key')
+        if not gemini_api_key:
+            cache.delete(cooldown_key)
+            return Response({
+                'error': 'La API Key de Gemini no está configurada aún en el servidor. El administrador puede activarla en el Panel de Autoridades > Ajustes de IA.'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         b64_img = base64.b64encode(image_bytes).decode('utf-8')
 
@@ -904,8 +1481,19 @@ REGLAS CRÍTICAS DE EVALUACIÓN Y FILTRADO:
                             elif any(k in raw_cat for k in ['aire', 'humo', 'quem']):
                                 parsed['category'] = 'aire'
 
-                            # Activar cooldown de 3s
-                            cache.set(cooldown_key, True, timeout=3)
+                            # -------------------------------------------------------------
+                            # CAPA 3: GUARDADO EN CACHÉ DE LARGA DURACIÓN (24 Horas)
+                            # Permite responder de inmediato si cualquier usuario o vista
+                            # vuelve a pedir el análisis de esta misma imagen.
+                            # -------------------------------------------------------------
+                            cache.set(cache_hash_key, parsed, timeout=86400)
+                            if image_url:
+                                clean_url = str(image_url).split('uploads/')[-1] if 'uploads/' in str(image_url) else str(image_url).strip()
+                                cache.set(f"analysis_res_{str(image_url).strip()}", parsed, timeout=86400)
+                                cache.set(f"analysis_res_{clean_url}", parsed, timeout=86400)
+
+                            # Mantener cooldown activo durante 12 segundos tras éxito
+                            cache.set(cooldown_key, True, timeout=12)
                             return Response(parsed)
                     elif res.status_code == 429:
                         last_error = 'Se alcanzó el límite de consultas gratuitas de Google Gemini (15 req/min). Por favor espera un momento o completa los campos manualmente.'
@@ -927,4 +1515,157 @@ REGLAS CRÍTICAS DE EVALUACIÓN Y FILTRADO:
             return Response({'error': last_error or 'No se pudo procesar la imagen con los modelos disponibles.'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': f'Error en el análisis de Gemini: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': last_error or 'No se pudo procesar la imagen con los modelos disponibles.'}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'error': f'Error en el análisis de Gemini: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class UserProfileView(APIView):
+    """Retorna el perfil ciudadano, balance de Eco-Puntos, nivel cívico y medallas obtenidas."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        reported_alerts = Alert.objects.filter(reported_by=user)
+        total_reported = reported_alerts.count()
+        total_solved = reported_alerts.filter(status='solved').count()
+        total_in_inspection = reported_alerts.filter(status='verified').count()
+        total_confirmations_given = user.confirmed_alerts.count()
+
+        # Cálculo de Eco-Puntos: 50 pts por reporte, 100 pts extra por reporte resuelto, 10 pts por confirmación
+        eco_points = (total_reported * 50) + (total_solved * 100) + (total_confirmations_given * 10)
+
+        # Rango y Nivel Cívico
+        if eco_points >= 800:
+            rank = "Fiscalizador Cívico Mayor"
+            level = 4
+            badge_icon = "🛡️"
+            next_level_points = 1500
+        elif eco_points >= 400:
+            rank = "Eco-Líder de Pasco"
+            level = 3
+            badge_icon = "🥇"
+            next_level_points = 800
+        elif eco_points >= 150:
+            rank = "Guardián Ambiental"
+            level = 2
+            badge_icon = "🥈"
+            next_level_points = 400
+        elif eco_points >= 50:
+            rank = "Vecino Comprometido"
+            level = 1
+            badge_icon = "🥉"
+            next_level_points = 150
+        else:
+            rank = "Vecino Iniciado"
+            level = 0
+            badge_icon = "🌱"
+            next_level_points = 50
+
+        medals = []
+        if total_reported >= 1:
+            medals.append({"id": "first_report", "title": "Primer Paso Verde", "desc": "Enviaste tu primer reporte ambiental", "icon": "🌱"})
+        if total_solved >= 1:
+            medals.append({"id": "first_solved", "title": "Impacto Real", "desc": "Una de tus denuncias fue atendida y solucionada", "icon": "✅"})
+        if total_reported >= 5:
+            medals.append({"id": "vigilant", "title": "Centinela de Pasco", "desc": "5 o más alertas registradas con éxito", "icon": "👁️"})
+        if total_confirmations_given >= 3:
+            medals.append({"id": "community", "title": "Voz Comunitaria", "desc": "Apoyaste 3 o más denuncias de otros vecinos", "icon": "🤝"})
+        if total_solved >= 3:
+            medals.append({"id": "master_eco", "title": "Héroe Ambiental", "desc": "3 o más alertas resueltas por las autoridades", "icon": "🏆"})
+
+        return Response({
+            "username": user.username,
+            "email": user.email,
+            "is_staff": user.is_staff,
+            "eco_points": eco_points,
+            "rank": rank,
+            "level": level,
+            "badge_icon": badge_icon,
+            "next_level_points": next_level_points,
+            "total_reported": total_reported,
+            "total_solved": total_solved,
+            "total_in_inspection": total_in_inspection,
+            "total_confirmations_given": total_confirmations_given,
+            "medals": medals,
+        })
+
+
+class PublicAlertVerificationView(APIView):
+    """Punto de verificación pública de autenticidad pericial (consultado por escaneo de QR)."""
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, pk=None):
+        try:
+            alert = Alert.objects.get(pk=pk)
+        except Alert.DoesNotExist:
+            return Response({'error': 'Expediente no encontrado o código de verificación inválido.'}, status=status.HTTP_404_NOT_FOUND)
+
+        raw_hash_data = f"{alert.id}:{alert.created_at.isoformat()}:{alert.status}:{alert.latitude}:{alert.longitude}:{alert.title}"
+        verification_hash = hashlib.sha256(raw_hash_data.encode()).hexdigest()[:16].upper()
+
+        return Response({
+            "expediente_id": f"EXP-{alert.created_at.year}-{alert.id:05d}",
+            "verification_hash": verification_hash,
+            "system": "Sistema Integral de Fiscalización Ambiental EcoAlerta Pasco",
+            "title": alert.title,
+            "description": alert.description,
+            "category": alert.get_category_display(),
+            "severity": alert.get_severity_display(),
+            "district": alert.get_district_display(),
+            "address": alert.address,
+            "latitude": alert.latitude,
+            "longitude": alert.longitude,
+            "status": alert.status,
+            "status_display": alert.get_status_display(),
+            "created_at": alert.created_at.strftime("%Y-%m-%d %H:%M"),
+            "resolved_at": alert.resolved_at.strftime("%Y-%m-%d %H:%M") if alert.resolved_at else None,
+            "resolution_comment": alert.resolution_comment,
+            "resolution_image_url": alert.resolution_image_url,
+            "image_url": alert.image_url,
+            "image_url_2": alert.image_url_2,
+            "confirmations_count": alert.confirmations_count,
+            "history_log": alert.history_log,
+        })
+
+
+class HealthCheckView(APIView):
+    """Monitoreo de estado operativo del backend, base de datos y servicios."""
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        from django.db import connection
+        db_ok = False
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1;")
+                db_ok = cursor.fetchone()[0] == 1
+        except Exception:
+            db_ok = False
+
+        gemini_active = SystemConfig.is_gemini_enabled()
+        total_alerts = Alert.objects.count()
+        total_waste_points = WastePoint.objects.count()
+
+        channel_backend = settings.CHANNEL_LAYERS.get("default", {}).get("BACKEND", "")
+        ws_layer = "redis" if "redis" in channel_backend.lower() else "inmemory_asgi"
+
+        return Response({
+            "status": "healthy" if db_ok else "unhealthy",
+            "service": "EcoAlerta API & WebSocket Backend",
+            "version": "2.3.0-realtime",
+            "timestamp": timezone.now().isoformat(),
+            "database": "connected" if db_ok else "disconnected",
+            "realtime": {
+                "protocol": "websocket",
+                "endpoint": "/ws/map/",
+                "channel_layer": ws_layer,
+            },
+            "gemini_ai_enabled": gemini_active,
+            "stats": {
+                "total_alerts": total_alerts,
+                "total_waste_points": total_waste_points,
+            }
+        })
+
 

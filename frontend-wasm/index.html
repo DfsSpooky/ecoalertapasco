@@ -1,0 +1,1296 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full w-full bg-slate-50 text-slate-900">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>EcoAlerta — Monitoreo Ambiental Cerro de Pasco</title>
+  
+  <!-- PWA & Mobile Meta Tags -->
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#059669" />
+  <meta name="ecoalerta-api-url" content="" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="description" content="Sistema Ciudadano y Municipal de Gestión y Fiscalización Ambiental en Cerro de Pasco" />
+  
+  <!-- Inter & Plus Jakarta Sans Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Leaflet Maps CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Leaflet Heatmap Plugin -->
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <!-- HTML to PDF Generator (Actas Oficiales de Fiscalización) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <!-- Google Identity Services (GIS) for Google Sign-In -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- Cloudflare Turnstile CAPTCHA (Explicit Render) -->
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+
+  <!-- Font Awesome 6 Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+  <style>
+    * {
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    /* Apple style radar ripple for critical alerts */
+    @keyframes appleRadar {
+      0% {
+        transform: scale(0.92);
+        box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.5);
+      }
+      70% {
+        transform: scale(1.08);
+        box-shadow: 0 0 0 14px rgba(220, 38, 38, 0);
+      }
+      100% {
+        transform: scale(0.92);
+        box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);
+      }
+    }
+    .apple-radar-pin {
+      animation: appleRadar 2.2s infinite cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* Google Maps / Apple Maps style blue GPS pulse for user location */
+    @keyframes userLocationPulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.65);
+      }
+      70% {
+        box-shadow: 0 0 0 16px rgba(37, 99, 235, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+      }
+    }
+    .user-gps-pulse {
+      animation: userLocationPulse 2s infinite cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* Google Gemini AI Vision Holographic Scanner Animations */
+    @keyframes geminiLaserScan {
+      0% {
+        top: 0%;
+        opacity: 0.85;
+      }
+      50% {
+        top: calc(100% - 3px);
+        opacity: 1;
+      }
+      100% {
+        top: 0%;
+        opacity: 0.85;
+      }
+    }
+    .gemini-laser-line {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, rgba(56, 189, 248, 0) 0%, rgba(56, 189, 248, 1) 25%, rgba(168, 85, 247, 1) 75%, rgba(168, 85, 247, 0) 100%);
+      box-shadow: 0 0 12px 3px rgba(56, 189, 248, 0.85), 0 0 24px 6px rgba(168, 85, 247, 0.6);
+      animation: geminiLaserScan 1.9s infinite ease-in-out;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    @keyframes geminiGlowPulse {
+      0%, 100% {
+        box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.5), 0 0 18px rgba(99, 102, 241, 0.35);
+      }
+      50% {
+        box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.8), 0 0 28px rgba(56, 189, 248, 0.6);
+      }
+    }
+    .gemini-scanning-card {
+      animation: geminiGlowPulse 2.2s infinite ease-in-out;
+    }
+
+    @keyframes geminiShimmer {
+      0% {
+        background-position: -200% 0;
+      }
+      100% {
+        background-position: 200% 0;
+      }
+    }
+    .gemini-shimmer-text {
+      background: linear-gradient(90deg, #3b82f6 0%, #8b5cf6 25%, #ec4899 50%, #8b5cf6 75%, #3b82f6 100%);
+      background-size: 200% auto;
+      color: transparent;
+      -webkit-background-clip: text;
+      background-clip: text;
+      animation: geminiShimmer 2.8s linear infinite;
+    }
+
+    @keyframes geminiSparkle {
+      0%, 100% {
+        transform: scale(0.92) rotate(0deg);
+        filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.7));
+      }
+      50% {
+        transform: scale(1.15) rotate(15deg);
+        filter: drop-shadow(0 0 10px rgba(168, 85, 247, 0.95));
+      }
+    }
+    .gemini-sparkle-icon {
+      animation: geminiSparkle 2s infinite ease-in-out;
+    }
+
+    /* Mobile UX utilities */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+    .safe-area-bottom {
+      padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+    }
+    button, a, [role="button"] {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .leaflet-bar {
+      border: none !important;
+      border-radius: 12px !important;
+      overflow: hidden !important;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08) !important;
+    }
+    .leaflet-bar a {
+      background-color: rgba(255, 255, 255, 0.95) !important;
+      color: #1e293b !important;
+      backdrop-filter: blur(8px) !important;
+      border: 1px solid rgba(226, 232, 240, 0.8) !important;
+      width: 36px !important;
+      height: 36px !important;
+      line-height: 36px !important;
+      font-weight: 600 !important;
+      transition: background 0.15s ease !important;
+    }
+    .leaflet-bar a:hover {
+      background-color: #f8fafc !important;
+      color: #0284c7 !important;
+    }
+    .leaflet-tooltip {
+      background: rgba(15, 23, 42, 0.9) !important;
+      color: #ffffff !important;
+      border: none !important;
+      border-radius: 8px !important;
+      padding: 6px 10px !important;
+      font-size: 11px !important;
+      font-weight: 600 !important;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+      backdrop-filter: blur(6px) !important;
+    }
+    .leaflet-tooltip::before {
+      border-top-color: rgba(15, 23, 42, 0.9) !important;
+    }
+    ::-webkit-scrollbar {
+      width: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+
+    /* Attractive custom horizontal scrollbar for Alerts Carousel */
+    #alerts-carousel-container {
+      scrollbar-width: thin;
+      scrollbar-color: #059669 rgba(241, 245, 249, 0.95);
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-x;
+    }
+    #alerts-carousel-container::-webkit-scrollbar {
+      height: 8px;
+    }
+    #alerts-carousel-container::-webkit-scrollbar-track {
+      background: rgba(241, 245, 249, 0.95);
+      border-radius: 9999px;
+      margin: 0 4px;
+      border: 1px solid rgba(203, 213, 225, 0.8);
+    }
+    #alerts-carousel-container::-webkit-scrollbar-thumb {
+      background: #059669;
+      border-radius: 9999px;
+      border: 1.5px solid rgba(255, 255, 255, 0.8);
+    }
+    #alerts-carousel-container::-webkit-scrollbar-thumb:hover {
+      background: #047857;
+    }
+
+    /* Native <dialog> scroll containment & Apple Sequoia sheet presentation */
+    dialog:modal {
+      overscroll-behavior: contain;
+    }
+    dialog::backdrop {
+      overflow: hidden;
+      overscroll-behavior: contain;
+      background: rgba(15, 23, 42, 0.34);
+      backdrop-filter: blur(14px) saturate(1.5);
+      -webkit-backdrop-filter: blur(14px) saturate(1.5);
+      animation: appleBackdropFade 220ms cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    dialog.apple-modal-dialog {
+      border: none;
+      padding: 0;
+      margin: auto;
+      width: 100%;
+      max-width: min(35rem, calc(100vw - 1.5rem));
+      max-height: min(88vh, 50rem);
+      border-radius: 28px;
+      background: rgba(245, 245, 247, 0.96);
+      backdrop-filter: blur(28px) saturate(1.8);
+      -webkit-backdrop-filter: blur(28px) saturate(1.8);
+      color: #1d1d1f;
+      box-shadow:
+        0 32px 88px -16px rgba(0, 0, 0, 0.32),
+        0 8px 24px -4px rgba(0, 0, 0, 0.08),
+        0 0 0 0.5px rgba(0, 0, 0, 0.12),
+        inset 0 1px 0 rgba(255, 255, 255, 0.75);
+      overflow: hidden;
+    }
+    dialog.apple-modal-dialog.apple-modal-dialog--sm {
+      max-width: min(28rem, calc(100vw - 1.5rem));
+    }
+    dialog.apple-modal-dialog[open] {
+      display: flex;
+      flex-direction: column;
+      animation: appleSheetEnter 280ms cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    @media (max-width: 639px) {
+      dialog.apple-modal-dialog {
+        max-width: 100vw;
+        max-height: 92vh;
+        margin: auto 0 0 0;
+        border-radius: 28px 28px 0 0;
+      }
+    }
+
+    @keyframes appleBackdropFade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes appleSheetEnter {
+      from {
+        opacity: 0;
+        transform: translateY(14px) scale(0.975);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    @keyframes appleInspectorEnter {
+      from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.985);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    /* Apple Maps Inspector Card — size-aware container query */
+    .apple-inspector-card {
+      container-type: inline-size;
+      animation: appleInspectorEnter 260ms cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    @container (max-width: 315px) {
+      .apple-inspector-actions button {
+        flex-direction: column;
+        height: auto;
+        padding-top: 0.45rem;
+        padding-bottom: 0.45rem;
+        gap: 0.2rem;
+        font-size: 10.5px;
+      }
+    }
+  </style>
+
+  <link data-trunk rel="copy-file" href="manifest.json" />
+  <link data-trunk rel="copy-file" href="sw.js" />
+  <link data-trunk rel="rust" data-bin="frontend-wasm" />
+</head>
+<body class="h-screen w-screen overflow-hidden bg-slate-50 text-slate-900 flex m-0 p-0 select-none">
+  <script>
+    // Google Identity Services (GIS) Bridge
+    window.ecoGoogleAuth = {
+      clientId: '',
+      isConfigured: false,
+      init: function(clientId) {
+        if (!clientId) return;
+        this.clientId = clientId;
+        this.isConfigured = true;
+        const self = this;
+        function tryInit() {
+          if (window.google && window.google.accounts && window.google.accounts.id) {
+            try {
+              window.google.accounts.id.initialize({
+                client_id: self.clientId,
+                callback: function(response) {
+                  if (response && response.credential) {
+                    window.ecoLastGoogleCredential = response.credential;
+                    const btn = document.getElementById('eco-hidden-google-dispatch-btn');
+                    if (btn) btn.click();
+                    window.dispatchEvent(new CustomEvent('ecoalerta:google-credential', {
+                      detail: { credential: response.credential }
+                    }));
+                  }
+                },
+                auto_select: false,
+                cancel_on_tap_outside: true
+              });
+            } catch (e) {
+              console.warn("GIS initialize error:", e);
+            }
+          } else {
+            setTimeout(tryInit, 200);
+          }
+        }
+        tryInit();
+      },
+      renderButton: function(containerId) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        const self = this;
+        function tryRender() {
+          if (window.google && window.google.accounts && window.google.accounts.id && self.clientId) {
+            try {
+              container.innerHTML = '';
+              window.google.accounts.id.renderButton(container, {
+                theme: 'outline',
+                size: 'large',
+                type: 'standard',
+                shape: 'pill',
+                text: 'continue_with',
+                logo_alignment: 'left',
+                width: Math.min(360, container.offsetWidth || 300)
+              });
+            } catch(e) {
+              console.warn("Render Google button error:", e);
+            }
+          }
+        }
+        tryRender();
+      },
+      prompt: function() {
+        if (window.google && window.google.accounts && window.google.accounts.id && this.clientId) {
+          try {
+            window.google.accounts.id.prompt();
+          } catch(e) {
+            console.warn("GIS prompt error:", e);
+          }
+        }
+      }
+    };
+
+    window.initAlertsCarouselDrag = function() {
+      const slider = document.getElementById('alerts-carousel-container');
+      if (!slider || slider.dataset.dragReady === 'true') return;
+      slider.dataset.dragReady = 'true';
+      let isDown = false;
+      let startX = 0;
+      let scrollLeft = 0;
+      let moved = false;
+
+      slider.addEventListener('mousedown', function(e) {
+        if (e.button !== 0) return;
+        isDown = true;
+        moved = false;
+        startX = e.pageX - slider.offsetLeft;
+        scrollLeft = slider.scrollLeft;
+        slider.style.cursor = 'grabbing';
+      });
+
+      window.addEventListener('mouseup', function() {
+        if (isDown) {
+          isDown = false;
+          slider.style.cursor = 'grab';
+        }
+      });
+
+      slider.addEventListener('mousemove', function(e) {
+        if (!isDown) return;
+        e.preventDefault();
+        const x = e.pageX - slider.offsetLeft;
+        const walk = (x - startX) * 1.5;
+        if (Math.abs(walk) > 4) moved = true;
+        slider.scrollLeft = scrollLeft - walk;
+      });
+
+      slider.addEventListener('click', function(e) {
+        if (moved) {
+          e.stopPropagation();
+          e.preventDefault();
+          moved = false;
+        }
+      }, true);
+    };
+
+    window.ecoMap = {
+      map: null,
+      markerLayer: null,
+      wasteLayer: null,
+      truckRouteLayer: null,
+      tileLayer: null,
+      currentStyle: 'osm', // 'osm' (calles por defecto), 'satellite', 'topo'
+
+      init: function(elementId, lat, lng, zoom) {
+        if (this.map) return;
+        this.map = L.map(elementId, {
+          zoomControl: false,
+          attributionControl: false
+        }).setView([lat, lng], zoom);
+
+        L.control.zoom({ position: 'bottomright' }).addTo(this.map);
+        L.control.attribution({ position: 'bottomright', prefix: false })
+          .addAttribution('&copy; <a href="https://www.openstreetmap.org/copyright" class="text-slate-500 hover:underline">OpenStreetMap</a> contributors')
+          .addTo(this.map);
+
+        // Mostrar mapa de calles (OpenStreetMap) por defecto
+        this.setLayer('osm');
+        this.markerLayer = L.layerGroup().addTo(this.map);
+        this.wasteLayer = L.layerGroup();
+
+        setTimeout(() => {
+          if (this.map) {
+            this.map.invalidateSize({ animate: false });
+          }
+        }, 150);
+
+        // ResizeObserver para mantener sincronizado el centro geográfico cuando el sidebar colapsa o expande en desktop
+        const mapEl = document.getElementById(elementId);
+        if (mapEl && window.ResizeObserver) {
+          const ro = new ResizeObserver(() => {
+            if (this.map) {
+              this.map.invalidateSize({ animate: false });
+            }
+          });
+          ro.observe(mapEl);
+          this._resizeObserver = ro;
+        }
+
+        window.addEventListener('resize', () => {
+          if (this.map) {
+            this.map.invalidateSize({ animate: false });
+          }
+        });
+
+        this.map.on('move', () => {
+          const center = this.map.getCenter();
+          if (window.onMapCenterChanged) {
+            window.onMapCenterChanged(center.lat, center.lng);
+          }
+        });
+
+        // Permitir hacer clic directo en el mapa para ubicar el reporte exactamente donde el usuario señale
+        this.map.on('click', (e) => {
+          if (window.isReportMode) {
+            this.map.flyTo([e.latlng.lat, e.latlng.lng], Math.max(this.map.getZoom(), 15), { duration: 0.4 });
+            if (window.onMapCenterChanged) {
+              window.onMapCenterChanged(e.latlng.lat, e.latlng.lng);
+            }
+          }
+        });
+      },
+
+      setLayer: function(style) {
+        this.currentStyle = style;
+        if (this.tileLayer) {
+          this.map.removeLayer(this.tileLayer);
+        }
+
+        let url = '';
+        let maxZoom = 19;
+
+        if (style === 'satellite') {
+          url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+        } else if (style === 'osm') {
+          url = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+        } else {
+          // Rich Topographic / Street Map with real Cerro de Pasco terrain & lakes
+          url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}';
+        }
+
+        this.tileLayer = L.tileLayer(url, { maxZoom: maxZoom }).addTo(this.map);
+      },
+
+      renderMarkers: function(alerts) {
+        if (!this.map || !this.markerLayer) return;
+        this.markerLayer.clearLayers();
+
+        alerts.forEach(alert => {
+          const isCritical = alert.severity === 'critico';
+          
+          let color = '#10B981'; // Emerald
+          if (alert.severity === 'critico') color = '#DC2626'; // Red
+          else if (alert.severity === 'medio') color = '#D97706'; // Amber
+
+          let iconSvg = '';
+          if (alert.category === 'mineria') {
+            iconSvg = `<svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m14 12-8.5 8.5a2.12 2.12 0 1 1-3-3L11 9"/><path d="M15 13 9 7l4-4 6 6-4 4Z"/><path d="m18 10 3 3"/></svg>`;
+          } else if (alert.category === 'basura') {
+            iconSvg = `<svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>`;
+          } else if (alert.category === 'agua') {
+            iconSvg = `<svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>`;
+          } else {
+            iconSvg = `<svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg>`;
+          }
+
+          const pinClass = isCritical ? 'apple-radar-pin' : '';
+          const customIcon = L.divIcon({
+            className: 'apple-map-pin',
+            html: `
+              <div class="relative flex items-center justify-center w-8 h-8 rounded-full shadow-[0_4px_12px_rgba(0,0,0,0.22)] ${pinClass}" style="background-color: ${color}; border: 2.5px solid #ffffff;">
+                ${iconSvg}
+              </div>
+            `,
+            iconSize: [32, 32],
+            iconAnchor: [16, 16],
+          });
+
+          const marker = L.marker([alert.latitude, alert.longitude], { icon: customIcon });
+          marker.on('click', () => {
+            if (window.onAlertSelected) {
+              window.onAlertSelected(alert.id);
+            }
+          });
+          marker.bindTooltip(`<b>${alert.title}</b>`, {
+            direction: 'top',
+            offset: [0, -16]
+          });
+          this.markerLayer.addLayer(marker);
+        });
+      },
+
+      renderWastePoints: function(points, visible) {
+        if (!this.map || !this.wasteLayer) return;
+        this.wasteLayer.clearLayers();
+
+        if (!visible) {
+          if (this.map.hasLayer(this.wasteLayer)) {
+            this.map.removeLayer(this.wasteLayer);
+          }
+          return;
+        }
+
+        if (!this.map.hasLayer(this.wasteLayer)) {
+          this.wasteLayer.addTo(this.map);
+        }
+
+        points.forEach(point => {
+          let bgColor = '#16a34a'; // Recyclable green
+          let iconSvg = '<svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/><path d="M11 19h8.2a1.8 1.8 0 0 0 1.573-.896 1.79 1.79 0 0 0 0-1.792L16.8 9.5"/><path d="m15.5 13-3.5 6-3.5-6"/><path d="m2 9 3-5 3 5"/><path d="M14 4h5.5a1.8 1.8 0 0 1 1.57.88 1.79 1.79 0 0 1 .005 1.79L18.5 12"/></svg>';
+
+          if (point.type === 'organic') {
+            bgColor = '#d97706'; // Organic amber
+            iconSvg = '<svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></svg>';
+          } else if (point.type === 'general') {
+            bgColor = '#475569'; // General slate
+            iconSvg = '<svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>';
+          }
+
+          let ringColor = 'border-emerald-400';
+          let ringPulse = '';
+          if (point.fill_level === 'medium') {
+            ringColor = 'border-amber-400';
+          } else if (point.fill_level === 'full') {
+            ringColor = 'border-red-500 ring-2 ring-red-400/50';
+            ringPulse = 'animate-pulse';
+          }
+
+          const pointIdStr = String(point.id);
+          const customIcon = L.divIcon({
+            className: 'apple-map-pin',
+            html: `
+              <div class="relative flex items-center justify-center w-8 h-8 rounded-full shadow-[0_4px_12px_rgba(0,0,0,0.25)] border-[2.5px] ${ringColor} ${ringPulse}" style="background-color: ${bgColor};">
+                ${iconSvg}
+              </div>
+            `,
+            iconSize: [32, 32],
+            iconAnchor: [16, 16],
+          });
+
+          const marker = L.marker([point.latitude, point.longitude], { icon: customIcon });
+          marker.on('click', () => {
+            if (window.onWastePointSelected) {
+              window.onWastePointSelected(pointIdStr);
+            }
+          });
+          marker.bindTooltip(`<b>${point.name}</b><br><span style="font-size:10px; opacity:0.85;">🕒 ${point.truck_schedule || 'Recolección municipal'}</span>`, {
+            direction: 'top',
+            offset: [0, -16]
+          });
+          this.wasteLayer.addLayer(marker);
+        });
+      },
+
+      renderTruckRoute: function(coords, visible) {
+        if (!this.map) return;
+        if (this.truckRouteLayer) {
+          this.map.removeLayer(this.truckRouteLayer);
+          this.truckRouteLayer = null;
+        }
+
+        if (!visible || !coords || coords.length === 0) return;
+
+        const latLngs = coords.map(c => [c[0], c[1]]);
+        this.truckRouteLayer = L.polyline(latLngs, {
+          color: '#16a34a',
+          weight: 4.5,
+          opacity: 0.7,
+          dashArray: '8, 8',
+          lineCap: 'round',
+          lineJoin: 'round'
+        }).addTo(this.map);
+
+        this.truckRouteLayer.bindTooltip("🚛 Ruta del Camión Recolector Municipal", {
+          sticky: true,
+          direction: 'top'
+        });
+      },
+
+      heatLayer: null,
+      routeWaypointsLayer: null,
+
+      renderHeatmap: function(alerts, visible) {
+        if (!this.map) return;
+        if (this.heatLayer) {
+          this.map.removeLayer(this.heatLayer);
+          this.heatLayer = null;
+        }
+        if (!visible || !alerts || alerts.length === 0) {
+          if (this.markerLayer && !this.map.hasLayer(this.markerLayer)) {
+            this.markerLayer.addTo(this.map);
+          }
+          return;
+        }
+
+        // Al activar mapa de calor, ocultamos los pines estándar para máxima legibilidad
+        if (this.markerLayer && this.map.hasLayer(this.markerLayer)) {
+          this.map.removeLayer(this.markerLayer);
+        }
+
+        const heatData = alerts.map(a => {
+          let intensity = 0.4;
+          if (a.severity === 'critico') intensity = 1.0;
+          else if (a.severity === 'medio') intensity = 0.65;
+          else intensity = 0.35;
+          return [a.latitude, a.longitude, intensity];
+        });
+
+        if (typeof L.heatLayer === 'function') {
+          this.heatLayer = L.heatLayer(heatData, {
+            radius: 30,
+            blur: 22,
+            maxZoom: 17,
+            gradient: { 0.2: '#06b6d4', 0.4: '#10b981', 0.6: '#eab308', 0.8: '#f97316', 1.0: '#ef4444' }
+          }).addTo(this.map);
+        }
+      },
+
+      renderOptimizedRoute: function(points, visible) {
+        if (!this.map) return;
+        if (this.truckRouteLayer) {
+          this.map.removeLayer(this.truckRouteLayer);
+          this.truckRouteLayer = null;
+        }
+        if (this.routeWaypointsLayer) {
+          this.map.removeLayer(this.routeWaypointsLayer);
+          this.routeWaypointsLayer = null;
+        }
+        if (!visible || !points || points.length === 0) return;
+
+        // Filtrar puntos prioritarios (Llenos o Medios)
+        const targets = points.filter(p => p.fill_level === 'full' || p.fill_level === 'medium');
+        if (targets.length === 0) return;
+
+        // Base municipal de maestranza en Yanacancha
+        let current = { lat: -10.655, lng: -76.255 };
+        let unvisited = [...targets];
+        let orderedPath = [ [current.lat, current.lng] ];
+        let stops = [];
+
+        let step = 1;
+        while (unvisited.length > 0) {
+          let closestIdx = 0;
+          let minDist = Infinity;
+          for (let i = 0; i < unvisited.length; i++) {
+            const p = unvisited[i];
+            const d = Math.hypot(p.latitude - current.lat, p.longitude - current.lng);
+            const weightedDist = p.fill_level === 'full' ? d * 0.65 : d;
+            if (weightedDist < minDist) {
+              minDist = weightedDist;
+              closestIdx = i;
+            }
+          }
+          const nextPoint = unvisited.splice(closestIdx, 1)[0];
+          orderedPath.push([nextPoint.latitude, nextPoint.longitude]);
+          stops.push({ step: step++, point: nextPoint });
+          current = { lat: nextPoint.latitude, lng: nextPoint.longitude };
+        }
+
+        // Retorno a base
+        orderedPath.push([-10.655, -76.255]);
+
+        this.truckRouteLayer = L.polyline(orderedPath, {
+          color: '#10b981',
+          weight: 5,
+          opacity: 0.85,
+          dashArray: '10, 8',
+          lineJoin: 'round'
+        }).addTo(this.map);
+
+        this.routeWaypointsLayer = L.layerGroup().addTo(this.map);
+        stops.forEach(s => {
+          const isFull = s.point.fill_level === 'full';
+          const bg = isFull ? '#dc2626' : '#d97706';
+          const icon = L.divIcon({
+            className: 'route-stop-badge',
+            html: `<div style="background:${bg}; color:#ffffff; font-size:11px; font-weight:800; border-radius:9999px; width:26px; height:26px; display:flex; align-items:center; justify-content:center; border:2.5px solid #ffffff; box-shadow:0 4px 12px rgba(0,0,0,0.35);">${s.step}</div>`,
+            iconSize: [26, 26],
+            iconAnchor: [13, 13]
+          });
+          const m = L.marker([s.point.latitude, s.point.longitude], { icon: icon });
+          m.bindTooltip(`<b>Parada ${s.step}: ${s.point.name}</b><br><span style="font-size:10px;">Prioridad: ${isFull ? '🔴 LLENO' : '🟡 MEDIO'}</span>`);
+          this.routeWaypointsLayer.addLayer(m);
+        });
+      },
+
+      userLocationMarker: null,
+      userAccuracyCircle: null,
+
+      setUserLocation: function(lat, lng) {
+        if (!this.map) return;
+
+        // Invalidar tamaño inmediatamente para que Leaflet conozca el centro exacto sin desfase por el sidebar
+        this.map.invalidateSize({ animate: false });
+
+        if (this.userLocationMarker) {
+          this.userLocationMarker.setLatLng([lat, lng]);
+        } else {
+          const userIcon = L.divIcon({
+            className: 'user-gps-marker',
+            html: `
+              <div class="relative flex items-center justify-center w-8 h-8 rounded-full bg-blue-600 user-gps-pulse" style="border: 3px solid #ffffff; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.55);">
+                <div style="width: 10px; height: 10px; border-radius: 9999px; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"></div>
+              </div>
+            `,
+            iconSize: [32, 32],
+            iconAnchor: [16, 16],
+          });
+
+          this.userLocationMarker = L.marker([lat, lng], {
+            icon: userIcon,
+            zIndexOffset: 1200
+          }).addTo(this.map);
+
+          this.userLocationMarker.bindTooltip(
+            "<b>📍 ¡Estás aquí!</b><br><span style='font-size:10px; opacity:0.85;'>Tu posición GPS en tiempo real</span>",
+            {
+              direction: 'top',
+              offset: [0, -18],
+              permanent: false
+            }
+          );
+        }
+
+        if (this.userAccuracyCircle) {
+          this.userAccuracyCircle.setLatLng([lat, lng]);
+        } else {
+          this.userAccuracyCircle = L.circle([lat, lng], {
+            radius: 45,
+            color: '#3b82f6',
+            fillColor: '#60a5fa',
+            fillOpacity: 0.16,
+            weight: 1.5,
+            dashArray: '4, 4'
+          }).addTo(this.map);
+        }
+
+        // Centrar el mapa con precisión milimétrica en las coordenadas GPS
+        this.map.setView([lat, lng], 16, { animate: true });
+        this.userLocationMarker.openTooltip();
+
+        // Sincronizar inmediatamente el centro reportado para que el marcador de incidencia coincida
+        if (window.onMapCenterChanged) {
+          window.onMapCenterChanged(lat, lng);
+        }
+      },
+
+      flyTo: function(lat, lng, zoom) {
+        if (this.map) {
+          this.map.flyTo([lat, lng], zoom || 15, { duration: 1.0 });
+        }
+      }
+    };
+
+    window.ecoGeo = {
+      getCurrentPosition: function() {
+        return new Promise((resolve, reject) => {
+          if (!navigator.geolocation) {
+            reject(new Error("Tu navegador no soporta geolocalización."));
+            return;
+          }
+          navigator.geolocation.getCurrentPosition(
+            pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+            err => reject(new Error(err.message || "Error al obtener ubicación GPS.")),
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+          );
+        });
+      },
+
+      reverseGeocode: async function(lat, lng) {
+        try {
+          const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
+          const res = await fetch(url);
+          if (!res.ok) return null;
+          const data = await res.json();
+          if (data && data.address) {
+            const parts = [];
+            if (data.address.road) parts.push(data.address.road);
+            if (data.address.house_number) parts.push(data.address.house_number);
+            if (data.address.neighbourhood || data.address.suburb) parts.push(data.address.neighbourhood || data.address.suburb);
+            if (data.address.city_district || data.address.county) parts.push(data.address.city_district || data.address.county);
+            if (parts.length > 0) return parts.join(', ');
+          }
+          return data.display_name || null;
+        } catch(e) {
+          return null;
+        }
+      }
+    };
+
+    window.ecoWastePicker = {
+      map: null,
+      marker: null,
+
+      init: function(elementId, initialLat, initialLng) {
+        const attemptInit = (retries) => {
+          const el = document.getElementById(elementId);
+          if (!el) {
+            if (retries > 0) {
+              setTimeout(() => attemptInit(retries - 1), 60);
+            }
+            return;
+          }
+
+          if (this.map) {
+            try {
+              this.map.remove();
+            } catch (e) {}
+            this.map = null;
+            this.marker = null;
+          }
+
+          const lat = (typeof initialLat === 'number' && !isNaN(initialLat) && initialLat !== 0) ? initialLat : -10.6675;
+          const lng = (typeof initialLng === 'number' && !isNaN(initialLng) && initialLng !== 0) ? initialLng : -76.2567;
+
+          this.map = L.map(elementId, {
+            zoomControl: true,
+            attributionControl: false
+          }).setView([lat, lng], 15);
+
+          L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19
+          }).addTo(this.map);
+
+          const customIcon = L.divIcon({
+            className: 'waste-picker-pin',
+            html: `
+              <div style="background-color: #059669; width: 34px; height: 34px; border-radius: 9999px; border: 3px solid #ffffff; box-shadow: 0 4px 14px rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; color: white;">
+                <svg style="width: 18px; height: 18px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/>
+                  <path d="M11 19h8.2a1.8 1.8 0 0 0 1.573-.896 1.79 1.79 0 0 0 0-1.792L16.8 9.5"/>
+                  <path d="m15.5 13-3.5 6-3.5-6"/>
+                  <path d="m2 9 3-5 3 5"/>
+                </svg>
+              </div>
+            `,
+            iconSize: [34, 34],
+            iconAnchor: [17, 17]
+          });
+
+          this.marker = L.marker([lat, lng], {
+            icon: customIcon,
+            draggable: true
+          }).addTo(this.map);
+
+          const notifyCoords = (newLat, newLng) => {
+            const roundedLat = Math.round(newLat * 1000000) / 1000000;
+            const roundedLng = Math.round(newLng * 1000000) / 1000000;
+            if (window.onWastePickerCoordsChanged) {
+              window.onWastePickerCoordsChanged(roundedLat, roundedLng);
+            }
+          };
+
+          this.marker.on('dragend', (e) => {
+            const pos = e.target.getLatLng();
+            notifyCoords(pos.lat, pos.lng);
+          });
+
+          this.map.on('click', (e) => {
+            this.marker.setLatLng(e.latlng);
+            notifyCoords(e.latlng.lat, e.latlng.lng);
+          });
+
+          setTimeout(() => {
+            if (this.map) {
+              this.map.invalidateSize();
+            }
+          }, 150);
+          setTimeout(() => {
+            if (this.map) {
+              this.map.invalidateSize();
+            }
+          }, 450);
+        };
+
+        attemptInit(15);
+      },
+
+      setPosition: function(lat, lng) {
+        if (!this.map || !this.marker) return;
+        const validLat = (typeof lat === 'number' && !isNaN(lat)) ? lat : -10.6675;
+        const validLng = (typeof lng === 'number' && !isNaN(lng)) ? lng : -76.2567;
+        this.marker.setLatLng([validLat, validLng]);
+        this.map.setView([validLat, validLng], Math.max(this.map.getZoom(), 15), { animate: true });
+        if (window.onWastePickerCoordsChanged) {
+          window.onWastePickerCoordsChanged(validLat, validLng);
+        }
+      }
+    };
+
+    window.ecoUpload = {
+      _sendFile: async function(file, uploadUrl, explicitToken) {
+        const formData = new FormData();
+        formData.append("image", file);
+        const token = explicitToken || window.localStorage.getItem("eco_auth_token") || "";
+        const headers = {};
+        if (token) {
+          headers["Authorization"] = `Token ${token}`;
+        }
+        const resp = await fetch(uploadUrl, {
+          method: "POST",
+          headers,
+          body: formData
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          throw new Error(data.error || data.detail || `Error al subir imagen (${resp.status})`);
+        }
+        return data.url;
+      },
+
+      uploadFile: async function(inputIdOrUrl, uploadUrlOrToken) {
+        // Modo selector directo (usado por Panel de Autoridades al adjuntar evidencia de resolución)
+        if (typeof inputIdOrUrl === "string" && (inputIdOrUrl.startsWith("http://") || inputIdOrUrl.startsWith("https://") || inputIdOrUrl.startsWith("/"))) {
+          const uploadUrl = inputIdOrUrl;
+          const token = uploadUrlOrToken || "";
+          return new Promise((resolve, reject) => {
+            const picker = document.createElement("input");
+            picker.type = "file";
+            picker.accept = "image/*";
+            picker.onchange = async () => {
+              if (!picker.files || picker.files.length === 0) {
+                reject(new Error("No se seleccionó ninguna fotografía."));
+                return;
+              }
+              try {
+                const uploadedUrl = await window.ecoUpload._sendFile(picker.files[0], uploadUrl, token);
+                resolve(uploadedUrl);
+              } catch (err) {
+                reject(err);
+              }
+            };
+            picker.click();
+          });
+        }
+
+        // Modo input DOM existente (usado por ReportDialog ciudadano)
+        const input = document.getElementById(inputIdOrUrl);
+        if (!input || !input.files || input.files.length === 0) {
+          throw new Error("Selecciona un archivo de imagen válido.");
+        }
+        return window.ecoUpload._sendFile(input.files[0], uploadUrlOrToken, "");
+      }
+    };
+
+    window.ecoPdf = {
+      generateInspectionActa: function(alertData) {
+        const apiBase = (window.__ECOALERTA_API_BASE__ || window.location.origin).replace(/\/+$/, '');
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(apiBase + '/api/alerts/' + alertData.id + '/verify/')}`;
+        const container = document.createElement('div');
+        container.style.padding = '36px';
+        container.style.fontFamily = 'Arial, sans-serif';
+        container.style.color = '#0f172a';
+        container.style.background = '#ffffff';
+        container.style.maxWidth = '800px';
+
+        const statusText = alertData.status === 'solved' ? 'SOLUCIONADO / CONFORME' : (alertData.status === 'verified' ? 'EN INSPECCIÓN' : 'PENDIENTE');
+        const statusColor = alertData.status === 'solved' ? '#15803d' : '#b45309';
+
+        container.innerHTML = `
+          <div style="border-bottom: 3px solid #059669; padding-bottom: 14px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <h1 style="font-size: 17px; font-weight: 800; color: #047857; margin: 0; text-transform: uppercase;">MUNICIPALIDAD PROVINCIAL DE PASCO</h1>
+              <p style="font-size: 12px; color: #475569; margin: 2px 0 0 0;">Subgerencia de Fiscalización y Gestión Ambiental • EcoAlerta Pasco</p>
+            </div>
+            <div style="text-align: right;">
+              <span style="font-size: 10px; font-weight: 700; color: #64748b; display: block;">EXPEDIENTE N°</span>
+              <span style="font-size: 15px; font-weight: 800; color: #0f172a;">EXP-2026-${String(alertData.id).padStart(5, '0')}</span>
+            </div>
+          </div>
+
+          <div style="text-align: center; margin-bottom: 20px;">
+            <h2 style="font-size: 15px; font-weight: 800; margin: 0; text-transform: uppercase; letter-spacing: 0.5px;">ACTA OFICIAL DE INSPECCIÓN Y FISCALIZACIÓN AMBIENTAL</h2>
+            <p style="font-size: 11px; color: #64748b; margin: 3px 0 0 0;">Constatación Oficial y Trazabilidad Municipal de Hechos Ambientales</p>
+          </div>
+
+          <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 20px;">
+            <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 7px 10px; font-weight: 700; width: 30%;">Título del Incidente:</td>
+              <td style="padding: 7px 10px; font-weight: 600;">${alertData.title}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 7px 10px; font-weight: 700;">Categoría y Severidad:</td>
+              <td style="padding: 7px 10px;">${alertData.category} • <b style="text-transform: capitalize;">${alertData.severity}</b></td>
+            </tr>
+            <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 7px 10px; font-weight: 700;">Jurisdicción Distrital:</td>
+              <td style="padding: 7px 10px;">Distrito de ${alertData.district || 'Cerro de Pasco'}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 7px 10px; font-weight: 700;">Ubicación / Dirección:</td>
+              <td style="padding: 7px 10px;">${alertData.address}</td>
+            </tr>
+            <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 7px 10px; font-weight: 700;">Coordenadas GPS:</td>
+              <td style="padding: 7px 10px; font-family: monospace;">LAT: ${alertData.latitude.toFixed(6)} | LNG: ${alertData.longitude.toFixed(6)}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 7px 10px; font-weight: 700;">Estado de la Diligencia:</td>
+              <td style="padding: 7px 10px;"><span style="color: ${statusColor}; font-weight: 800;">${statusText}</span></td>
+            </tr>
+            <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 7px 10px; font-weight: 700;">Fecha de Registro:</td>
+              <td style="padding: 7px 10px;">${alertData.created_at || 'Inmediata'}</td>
+            </tr>
+            ${alertData.resolved_at ? `
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 7px 10px; font-weight: 700;">Fecha de Resolución / Cierre:</td>
+              <td style="padding: 7px 10px; font-weight: 600; color: #15803d;">${alertData.resolved_at}</td>
+            </tr>` : ''}
+          </table>
+
+          <div style="margin-bottom: 18px;">
+            <h3 style="font-size: 12px; font-weight: 700; color: #334155; margin-bottom: 6px; text-transform: uppercase;">1. Descripción de la Evidencia Reportada</h3>
+            <p style="font-size: 11px; line-height: 1.5; color: #475569; background: #f8fafc; padding: 10px; border-radius: 6px; border: 1px solid #e2e8f0; margin: 0;">
+              ${alertData.description}
+            </p>
+          </div>
+
+          ${alertData.resolution_comment ? `
+          <div style="margin-bottom: 18px;">
+            <h3 style="font-size: 12px; font-weight: 700; color: #15803d; margin-bottom: 6px; text-transform: uppercase;">2. Dictamen de Solución de la Cuadrilla</h3>
+            <p style="font-size: 11px; line-height: 1.5; color: #166534; background: #f0fdf4; padding: 10px; border-radius: 6px; border: 1px solid #bbf7d0; margin: 0;">
+              ${alertData.resolution_comment}
+            </p>
+          </div>` : ''}
+
+          <div style="margin-top: 36px; display: flex; justify-content: space-between; align-items: flex-end;">
+            <div style="text-align: center; width: 140px;">
+              <img src="${qrUrl}" alt="QR Verificación" style="width: 90px; height: 90px; border: 1px solid #cbd5e1; padding: 4px; border-radius: 4px;" />
+              <p style="font-size: 8px; color: #64748b; margin: 4px 0 0 0;">Escanear para verificar autenticidad legal en el servidor</p>
+            </div>
+            <div style="text-align: center; width: 220px; border-top: 1px solid #334155; padding-top: 6px;">
+              <p style="font-size: 11px; font-weight: 700; margin: 0;">FISCALIZADOR AMBIENTAL</p>
+              <p style="font-size: 9px; color: #64748b; margin: 2px 0 0 0;">Subgerencia de Fiscalización</p>
+              <p style="font-size: 8px; color: #94a3b8; margin: 2px 0 0 0;">Municipalidad de Pasco</p>
+            </div>
+            <div style="text-align: center; width: 220px; border-top: 1px solid #334155; padding-top: 6px;">
+              <p style="font-size: 11px; font-weight: 700; margin: 0;">JEFE DE CUADRILLA</p>
+              <p style="font-size: 9px; color: #64748b; margin: 2px 0 0 0;">Operaciones y Limpieza Pública</p>
+              <p style="font-size: 8px; color: #94a3b8; margin: 2px 0 0 0;">Visto Bueno y Conformidad</p>
+            </div>
+          </div>
+        `;
+
+        const opt = {
+          margin: 10,
+          filename: `Acta_Fiscalizacion_Pasco_EXP_${String(alertData.id).padStart(5, '0')}.pdf`,
+          image: { type: 'jpeg', quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        };
+
+        if (window.html2pdf) {
+          window.html2pdf().set(opt).from(container).save();
+        } else {
+          window.print();
+        }
+      }
+    };
+
+    window.ecoNotify = {
+      requestPermission: async function() {
+        if (!('Notification' in window)) return false;
+        const p = await Notification.requestPermission();
+        return p === 'granted';
+      },
+      sendNotification: function(title, body, icon) {
+        if (!('Notification' in window) || Notification.permission !== 'granted') return;
+        try {
+          new Notification(title, {
+            body: body,
+            icon: icon || 'https://img.icons8.com/color/192/leaf.png'
+          });
+        } catch(e) {
+          console.warn("Notification error:", e);
+        }
+      }
+    };
+
+    window.ecoOffline = {
+      saveDraft: function(draft) {
+        const key = 'ecoalerta_offline_drafts';
+        const list = JSON.parse(localStorage.getItem(key) || '[]');
+        list.push(draft);
+        localStorage.setItem(key, JSON.stringify(list));
+      },
+      getDrafts: function() {
+        return JSON.parse(localStorage.getItem('ecoalerta_offline_drafts') || '[]');
+      },
+      clearDrafts: function() {
+        localStorage.removeItem('ecoalerta_offline_drafts');
+      },
+      isOnline: function() {
+        return navigator.onLine;
+      }
+    };
+
+    // Cloudflare Turnstile Helpers
+    window.ecoTurnstile = {
+      widgetId: null,
+      lastToken: '',
+      render: function(containerId, sitekey) {
+        if (!window.turnstile) {
+          setTimeout(() => window.ecoTurnstile.render(containerId, sitekey), 200);
+          return;
+        }
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        // Reset existing widget if present
+        if (window.ecoTurnstile.widgetId !== null) {
+          try {
+            window.turnstile.reset(window.ecoTurnstile.widgetId);
+            return;
+          } catch(e) {
+            window.ecoTurnstile.widgetId = null;
+          }
+        }
+
+        container.innerHTML = '';
+        try {
+          window.ecoTurnstile.widgetId = window.turnstile.render('#' + containerId, {
+            sitekey: sitekey || '1x00000000000000000000AA',
+            theme: 'light',
+            size: 'normal',
+            callback: function(token) {
+              window.ecoTurnstile.lastToken = token || '';
+              const btn = document.getElementById('eco-hidden-turnstile-dispatch-btn');
+              if (btn) btn.click();
+            },
+            'expired-callback': function() {
+              window.ecoTurnstile.lastToken = '';
+              const btn = document.getElementById('eco-hidden-turnstile-dispatch-btn');
+              if (btn) btn.click();
+            },
+            'error-callback': function(code) {
+              console.warn('[Turnstile] Desafío fallido o bloqueado:', code);
+              window.ecoTurnstile.lastToken = '';
+              const btn = document.getElementById('eco-hidden-turnstile-dispatch-btn');
+              if (btn) btn.click();
+            }
+          });
+        } catch(err) {
+          console.error('[Turnstile] Error renderizando widget:', err);
+        }
+      },
+      reset: function() {
+        window.ecoTurnstile.lastToken = '';
+        if (window.turnstile && window.ecoTurnstile.widgetId !== null) {
+          try {
+            window.turnstile.reset(window.ecoTurnstile.widgetId);
+          } catch(e) {
+            console.warn('[Turnstile] Reset failed:', e);
+          }
+        }
+      },
+      remove: function() {
+        window.ecoTurnstile.lastToken = '';
+        if (window.turnstile && window.ecoTurnstile.widgetId !== null) {
+          try {
+            window.turnstile.remove(window.ecoTurnstile.widgetId);
+          } catch(e) {}
+          window.ecoTurnstile.widgetId = null;
+        }
+      },
+      getToken: function() {
+        if (window.turnstile && window.ecoTurnstile.widgetId !== null) {
+          try {
+            const resp = window.turnstile.getResponse(window.ecoTurnstile.widgetId);
+            if (resp) return resp;
+          } catch(e) {}
+        }
+        return window.ecoTurnstile.lastToken || '';
+      }
+    };
+
+    // Registrar Service Worker para PWA
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(err => {
+          console.warn('ServiceWorker registration error:', err);
+        });
+      });
+    }
+  </script>
+</body>
+</html>

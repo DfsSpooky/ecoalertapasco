@@ -11,6 +11,9 @@ class AlertSerializer(serializers.ModelSerializer):
         read_only_fields = ('created_at', 'history_log', 'reported_by', 'resolved_at', 'confirmations_count')
 
     def get_has_user_confirmed(self, obj):
+        confirmed_ids = self.context.get('confirmed_alert_ids')
+        if confirmed_ids is not None:
+            return obj.id in confirmed_ids
         request = self.context.get('request')
         if request and hasattr(request, 'user') and request.user.is_authenticated:
             return obj.confirmed_by.filter(id=request.user.id).exists()

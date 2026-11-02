@@ -48,49 +48,43 @@ jobs:
           SECRET_KEY: "ci-secret-key-for-automated-github-tests"
         run: |
           cd backend
-          python manage.py test
+          python manage.py test alerts
 
   # ============================================================================
-  # 2. CI FRONTEND (Flutter Web)
+  # 2. CI FRONTEND (Rust / Leptos WebAssembly)
   # ============================================================================
   frontend-ci:
-    name: Flutter Web Build & Tests
+    name: Rust WASM Frontend Check
     runs-on: ubuntu-latest
 
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
 
-      - name: Configurar Flutter SDK (Canal Stable)
-        uses: subosito/flutter-action@v2
+      - name: Configurar Rust y Target WASM
+        uses: dtolnay/rust-toolchain@stable
         with:
-          channel: 'stable'
-          cache: true
+          targets: wasm32-unknown-unknown
 
-      - name: Instalar dependencias de Flutter
-        run: flutter pub get
+      - name: Cache de dependencias Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            frontend-wasm/target/
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('frontend-wasm/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
 
-      - name: Análisis estático de código (Linter)
-        run: flutter analyze
-
-      - name: Ejecutar pruebas unitarias de Flutter
-        run: flutter test
-
-      - name: Compilar paquete Flutter Web en modo Release
+      - name: Verificar compilación WebAssembly (cargo check)
         run: |
-          # Si se configuró PROD_BACKEND_URL en GitHub Secrets se inyecta, de lo contrario usa fallback
-          BACKEND_URL="${{ secrets.PROD_BACKEND_URL || 'https://api.ecoalerta.tudominio.com' }}"
-          flutter build web --release --dart-define=BACKEND_URL=$BACKEND_URL
-
-      - name: Guardar artefacto compilado de la Web
-        uses: actions/upload-artifact@v4
-        with:
-          name: ecoalerta-web-release
-          path: build/web/
-          retention-days: 7
+          cargo check --manifest-path frontend-wasm/Cargo.toml --target wasm32-unknown-unknown
 
   # ============================================================================
-  # 3. CD DESPLIEGUE A PRODUCCIÓN
+  # 3. CD DESPLIEGUE A PRODUCCIÓN (Coolify Webhook)
   # ============================================================================
   deploy:
     name: Deploy to Production
@@ -99,9 +93,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Notificar y Disparar Despliegue en Servidor
+      - name: Notificar y Disparar Despliegue en Coolify
         run: |
-          echo "🚀 Pipeline de integración continua aprobado al 100%."
+          echo "🚀 Pipeline de integración continua aprobado al 100% (Backend Django + Frontend Rust WASM)."
           
           # Si configuraste el Webhook de Coolify en GitHub Secrets:
           if [ -n "${{ secrets.COOLIFY_DEPLOY_WEBHOOK_URL }}" ]; then
@@ -110,5 +104,5 @@ jobs:
             echo "✅ Señal de despliegue enviada exitosamente a Coolify."
           else
             echo "ℹ️ COOLIFY_DEPLOY_WEBHOOK_URL no configurado aún en GitHub Secrets."
-            echo "ℹ️ Una vez añadido en Settings > Secrets, el despliegue será 100% automático."
+            echo "ℹ️ Una vez añadido en Settings > Secrets, el despliegue tras cada commit será 100% automático."
           fi
