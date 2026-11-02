@@ -8,7 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN rustup target add wasm32-unknown-unknown && cargo install --locked trunk
+RUN rustup target add wasm32-unknown-unknown && \
+    curl -fsSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin && \
+    chmod +x /usr/local/bin/trunk
 
 WORKDIR /app
 
