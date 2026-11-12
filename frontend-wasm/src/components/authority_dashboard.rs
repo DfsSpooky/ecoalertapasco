@@ -5,7 +5,9 @@ use crate::api::{
     alert_detail_url, system_settings_url, test_gemini_url, upload_url, waste_point_detail_url,
     waste_points_url,
 };
+use crate::components::fleet_routes_tab::FleetRoutesTab;
 use crate::models::{
+    TruckRun,
     AuthUser, CreateWastePointPayload, EcoAlert, EcoCategory, EcoDistrict, EcoSeverity, FillLevel,
     GeminiModelInfo, SystemSettingsResponse, TestGeminiResponse, WastePoint, WasteType,
 };
@@ -21,8 +23,9 @@ pub fn AuthorityDashboard(
     selected_alert_id: RwSignal<Option<String>>,
     selected_waste_point_id: RwSignal<Option<String>>,
     show_waste_layer: RwSignal<bool>,
+    truck_runs: RwSignal<Vec<TruckRun>>,
 ) -> impl IntoView {
-    let active_tab = create_rw_signal(0); // 0 = Denuncias, 1 = Puntos de Acopio
+    let active_tab = create_rw_signal(0); // 0 = Denuncias, 1 = Puntos de Acopio, 2 = Rutas y Flota
 
     // Alert filters
     let search_query = create_rw_signal("".to_string());
@@ -1193,12 +1196,38 @@ pub fn AuthorityDashboard(
                                     {move || waste_points.get().len()}
                                 </span>
                             </button>
+
+                            <button
+                                class=move || {
+                                    if active_tab.get() == 2 {
+                                        "px-4 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white shadow-xs flex items-center space-x-2 transition"
+                                    } else {
+                                        "px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 flex items-center space-x-2 transition"
+                                    }
+                                }
+                                on:click=move |_| active_tab.set(2)
+                            >
+                                <span>"🚛"</span>
+                                <span>"Rutas y Flota"</span>
+                                <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-mono">
+                                    {move || truck_runs.with(|r| r.iter().filter(|x| x.status == "active").count())}
+                                </span>
+                            </button>
                         </div>
                     </div>
 
                     // Main Container
                     <main class="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 py-6 space-y-6">
-                        {move || if active_tab.get() == 0 {
+                        {move || if active_tab.get() == 2 {
+                            view! {
+                                <FleetRoutesTab
+                                    truck_runs=truck_runs
+                                    waste_points=waste_points
+                                    current_user=current_user
+                                    show_dashboard=show_dashboard
+                                />
+                            }.into_view()
+                        } else if active_tab.get() == 0 {
                             view! {
                                 <div class="space-y-6 animate-in fade-in duration-150">
                                     // 5 KPI Cards Row

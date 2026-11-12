@@ -5,6 +5,7 @@ use crate::models::AuthUser;
 const KEY_TOKEN: &str = "eco_auth_token";
 const KEY_USERNAME: &str = "eco_auth_username";
 const KEY_IS_STAFF: &str = "eco_auth_is_staff";
+const KEY_IS_COLLECTOR: &str = "eco_auth_is_collector";
 const KEY_EMAIL: &str = "eco_auth_email";
 const KEY_PHOTO_URL: &str = "eco_auth_photo_url";
 const KEY_FULL_NAME: &str = "eco_auth_full_name";
@@ -42,6 +43,7 @@ pub fn load_remembered_google_user() -> Option<AuthUser> {
             username,
             email,
             is_staff: false,
+            is_collector: false,
             photo_url,
             full_name,
         })
@@ -64,6 +66,7 @@ pub fn save_auth_session(user: &AuthUser) {
             let _ = storage.set_item(KEY_TOKEN, &user.token);
             let _ = storage.set_item(KEY_USERNAME, &user.username);
             let _ = storage.set_item(KEY_IS_STAFF, if user.is_staff { "true" } else { "false" });
+            let _ = storage.set_item(KEY_IS_COLLECTOR, if user.is_collector { "true" } else { "false" });
             if let Some(ref email) = user.email {
                 let _ = storage.set_item(KEY_EMAIL, email);
             }
@@ -97,6 +100,12 @@ pub fn load_auth_session() -> Option<AuthUser> {
         .ok()?
         .map(|v| v == "true")
         .unwrap_or(false);
+    let is_collector = storage
+        .get_item(KEY_IS_COLLECTOR)
+        .ok()
+        .flatten()
+        .map(|v| v == "true")
+        .unwrap_or(false);
     let email = storage.get_item(KEY_EMAIL).ok()?.filter(|e| !e.is_empty());
     let photo_url = storage.get_item(KEY_PHOTO_URL).ok()?.filter(|p| !p.is_empty());
     let full_name = storage.get_item(KEY_FULL_NAME).ok()?.filter(|f| !f.is_empty());
@@ -106,6 +115,7 @@ pub fn load_auth_session() -> Option<AuthUser> {
         username,
         email,
         is_staff,
+        is_collector,
         photo_url,
         full_name,
     })
@@ -117,6 +127,7 @@ pub fn clear_auth_session() {
             let _ = storage.remove_item(KEY_TOKEN);
             let _ = storage.remove_item(KEY_USERNAME);
             let _ = storage.remove_item(KEY_IS_STAFF);
+            let _ = storage.remove_item(KEY_IS_COLLECTOR);
             let _ = storage.remove_item(KEY_EMAIL);
             let _ = storage.remove_item(KEY_PHOTO_URL);
             let _ = storage.remove_item(KEY_FULL_NAME);

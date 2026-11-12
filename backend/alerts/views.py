@@ -5,11 +5,12 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.authtoken.models import Token
 from rest_framework.throttling import UserRateThrottle, SimpleRateThrottle
-from rest_framework.exceptions import ValidationError, PermissionDenied
+from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
 from django.contrib.auth import authenticate, get_user_model
 from django.utils import timezone
 from django.conf import settings
 from django.core.cache import cache
+from django.db import transaction
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 import os
@@ -23,8 +24,16 @@ import urllib.error
 import urllib.parse
 from PIL import Image, ImageOps
 
-from .models import Alert, WastePoint, SystemConfig
-from .serializers import AlertSerializer, WastePointSerializer
+from .models import Alert, WastePoint, SystemConfig, Truck, CollectionRoute, RouteRun, is_collector
+from .tracking import broadcast_run_state, ingest_positions, public_open_runs_queryset, public_run_payload
+from .serializers import (
+    AlertSerializer,
+    WastePointSerializer,
+    TruckSerializer,
+    PublicTruckSerializer,
+    CollectionRouteSerializer,
+    RouteRunSerializer,
+)
 
 User = get_user_model()
 
@@ -121,6 +130,15 @@ def compute_sync_etag(user) -> tuple[str, set[int]]:
     for w_row in waste_rows:
         h.update(repr(w_row).encode('utf-8'))
 
+    # Las rutas publicadas cambian el ETag cuando se editan (updated_at) o se publican/retiran
+    route_rows = CollectionRoute.objects.filter(is_active=True).order_by('id').values_list('id', 'updated_at')
+    for r_row in route_rows:
+        h.update(repr(('route',) + tuple(r_row)).encode('utf-8'))
+
+    # Turnos abiertos: cambian con cada posición GPS para que el modo HTTP de respaldo vea moverse al camión
+    for run_row in public_open_runs_queryset().values_list('id', 'status', 'last_position_at'):
+        h.update(repr(('run',) + tuple(run_row)).encode('utf-8'))
+
     confirmed_ids: set[int] = set()
     if user and user.is_authenticated:
         confirmed_ids = set(user.confirmed_alerts.values_list('id', flat=True))
@@ -165,12 +183,15 @@ class SyncMapDataView(APIView):
             context={'request': request, 'confirmed_alert_ids': confirmed_ids},
         ).data
         waste_data = WastePointSerializer(waste_qs, many=True).data
+        routes_data = CollectionRouteSerializer(published_routes_queryset(), many=True).data
 
         return Response(
             {
                 'etag': etag,
                 'alerts': alerts_data,
                 'waste_points': waste_data,
+                'routes': routes_data,
+                'truck_runs': [public_run_payload(r) for r in public_open_runs_queryset()],
                 'server_time': timezone.now().isoformat(),
             },
             status=status.HTTP_200_OK,
@@ -433,6 +454,241 @@ class WastePointViewSet(viewsets.ModelViewSet):
         serializer.save()
 
 
+class IsStaffOrReadOnly(permissions.BasePermission):
+    """Lectura pública; escritura solo para autoridad municipal (is_staff)."""
+
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return bool(request.user and request.user.is_staff)
+
+
+def published_routes_queryset():
+    return (
+        CollectionRoute.objects.filter(is_active=True)
+        .select_related('default_truck')
+        .prefetch_related('stops')
+        .order_by('name')
+    )
+
+
+class CollectionRouteViewSet(viewsets.ModelViewSet):
+    """
+    Rutas de recolección (`/api/routes/`).
+    - Ciudadanos: ven solo las rutas publicadas.
+    - Autoridad: CRUD completo, incluidas rutas en borrador (`is_active=False`).
+    """
+    serializer_class = CollectionRouteSerializer
+    permission_classes = [IsStaffOrReadOnly]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_authenticated and user.is_staff:
+            return (
+                CollectionRoute.objects.all()
+                .select_related('default_truck')
+                .prefetch_related('stops')
+                .order_by('name')
+            )
+        return published_routes_queryset()
+
+    def destroy(self, request, *args, **kwargs):
+        route = self.get_object()
+        if route.runs.exists():
+            return Response(
+                {'error': 'Esta ruta tiene recorridos registrados. Retírala (despublicar) en lugar de eliminarla para conservar el historial.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=False, methods=['post'])
+    def snap(self, request):
+        """
+        `POST /api/routes/snap/` (solo autoridad): `{"waypoints": [[lat, lng], ...]}` →
+        trazo ajustado a calles con distancia y duración estimadas.
+        """
+        from .road_snapping import SnapError, snap_waypoints
+        from .serializers import MAX_ROUTE_WAYPOINTS, clean_lat_lng_list
+
+        raw = request.data.get('waypoints') if isinstance(request.data, dict) else None
+        try:
+            waypoints = clean_lat_lng_list(raw, min_len=2, max_len=MAX_ROUTE_WAYPOINTS, label="puntos de control")
+        except ValidationError as exc:
+            return Response({'error': exc.detail[0] if isinstance(exc.detail, list) else str(exc.detail)}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            return Response(snap_waypoints(waypoints))
+        except SnapError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+
+class TruckViewSet(viewsets.ModelViewSet):
+    """
+    Flota de camiones (`/api/trucks/`).
+    - Ciudadanos: código público y tipo de residuo de los camiones operativos.
+    - Autoridad: CRUD completo con placa y conductor asignado.
+    - Conductor recolector: ve los camiones que tiene asignados (vista completa).
+    """
+    permission_classes = [IsStaffOrReadOnly]
+
+    def _is_privileged(self):
+        user = self.request.user
+        return user.is_authenticated and (user.is_staff or is_collector(user))
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Truck.objects.select_related('driver').order_by('code')
+        if user.is_authenticated and user.is_staff:
+            return qs
+        if is_collector(user):
+            return qs.filter(is_active=True, driver=user)
+        return qs.filter(is_active=True)
+
+    def get_serializer_class(self):
+        if self._is_privileged():
+            return TruckSerializer
+        return PublicTruckSerializer
+
+
+class GpsIngestRateThrottle(UserRateThrottle):
+    scope = 'gps_ingest'
+
+
+class RouteRunViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Turnos de recolección (`/api/runs/`).
+    - Autoridad: ve todos los turnos y puede pausar/finalizar cualquiera.
+    - Conductor recolector: inicia turnos con su camión asignado y envía su GPS.
+    """
+    serializer_class = RouteRunSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = RouteRun.objects.select_related('route', 'truck', 'driver').order_by('-started_at')
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            qs = qs.filter(status=status_param)
+        if user.is_staff:
+            return qs
+        if is_collector(user):
+            return qs.filter(driver=user)
+        return qs.none()
+
+    def _require_collector_or_staff(self, user):
+        if not (user.is_staff or is_collector(user)):
+            raise PermissionDenied("Solo conductores recolectores o la autoridad municipal pueden gestionar turnos.")
+
+    def _get_owned_run(self, pk, allow_staff=True):
+        run = RouteRun.objects.select_related('route', 'truck').filter(pk=pk).first()
+        if run is None:
+            raise NotFound("Turno no encontrado.")
+        user = self.request.user
+        if run.driver_id == user.id or (allow_staff and user.is_staff):
+            return run
+        raise PermissionDenied("Este turno pertenece a otro conductor.")
+
+    @action(detail=False, methods=['get'], url_path='driver-context')
+    def driver_context(self, request):
+        """Todo lo que el Modo Recolector necesita para arrancar: camiones, rutas y turno abierto."""
+        user = request.user
+        self._require_collector_or_staff(user)
+        trucks = Truck.objects.filter(is_active=True).select_related('driver').order_by('code')
+        if not user.is_staff:
+            trucks = trucks.filter(driver=user)
+        open_run = (
+            RouteRun.objects.filter(driver=user, status__in=['active', 'paused'])
+            .select_related('route', 'truck', 'driver')
+            .first()
+        )
+        return Response({
+            'trucks': TruckSerializer(trucks, many=True).data,
+            'routes': CollectionRouteSerializer(published_routes_queryset(), many=True).data,
+            'open_run': RouteRunSerializer(open_run).data if open_run else None,
+        })
+
+    @action(detail=False, methods=['post'])
+    def start(self, request):
+        user = request.user
+        self._require_collector_or_staff(user)
+        truck = Truck.objects.filter(pk=request.data.get('truck'), is_active=True).first()
+        route = CollectionRoute.objects.filter(pk=request.data.get('route'), is_active=True).first()
+        if truck is None or route is None:
+            raise ValidationError("Selecciona un camión operativo y una ruta publicada.")
+        if not user.is_staff and truck.driver_id != user.id:
+            raise PermissionDenied("Este camión no está asignado a tu cuenta.")
+
+        with transaction.atomic():
+            open_for_truck = (
+                RouteRun.objects.select_for_update()
+                .filter(truck=truck, status__in=['active', 'paused'])
+                .first()
+            )
+            if open_for_truck:
+                if open_for_truck.driver_id == user.id and open_for_truck.route_id == route.id:
+                    # Idempotente: reintento tras perder la conexión
+                    return Response(RouteRunSerializer(open_for_truck).data, status=status.HTTP_200_OK)
+                return Response(
+                    {'error': f'El camión {truck.code} ya tiene un turno abierto. Finalízalo antes de iniciar otro.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if RouteRun.objects.filter(driver=user, status__in=['active', 'paused']).exists():
+                return Response(
+                    {'error': 'Ya tienes otro turno abierto. Finalízalo antes de iniciar uno nuevo.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            run = RouteRun.objects.create(route=route, truck=truck, driver=user, status='active')
+            broadcast_run_state(run.id)
+        return Response(RouteRunSerializer(run).data, status=status.HTTP_201_CREATED)
+
+    def _transition(self, pk, allowed_from, new_status):
+        with transaction.atomic():
+            run = self._get_owned_run(pk)
+            run = RouteRun.objects.select_for_update().get(pk=run.pk)
+            if run.status not in allowed_from:
+                return Response(
+                    {'error': f'No se puede pasar de "{run.get_status_display()}" a "{new_status}".', 'status': run.status},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            run.status = new_status
+            update_fields = ['status']
+            if new_status == 'finished':
+                run.ended_at = timezone.now()
+                update_fields.append('ended_at')
+            run.save(update_fields=update_fields)
+            broadcast_run_state(run.id)
+        return Response(RouteRunSerializer(run).data)
+
+    @action(detail=True, methods=['post'])
+    def pause(self, request, pk=None):
+        return self._transition(pk, ['active'], 'paused')
+
+    @action(detail=True, methods=['post'])
+    def resume(self, request, pk=None):
+        return self._transition(pk, ['paused'], 'active')
+
+    @action(detail=True, methods=['post'])
+    def finish(self, request, pk=None):
+        return self._transition(pk, ['active', 'paused'], 'finished')
+
+    @action(detail=True, methods=['post'], throttle_classes=[GpsIngestRateThrottle])
+    def positions(self, request, pk=None):
+        """
+        Recibe un lote de posiciones GPS: `{"points": [{"lat", "lng", "accuracy", "speed", "heading", "ts"}]}`.
+        Responde 409 si el turno ya no admite posiciones (pausado/finalizado) para que el teléfono deje de enviar.
+        """
+        run = self._get_owned_run(pk, allow_staff=False)
+        if run.status != 'active':
+            return Response(
+                {'error': 'El turno no está en recorrido.', 'status': run.status},
+                status=status.HTTP_409_CONFLICT,
+            )
+        points = request.data.get('points') if isinstance(request.data, dict) else None
+        if points is None:
+            points = [request.data]
+        result = ingest_positions(run, points)
+        return Response(result, status=status.HTTP_200_OK)
+
+
 class LoginView(APIView):
     authentication_classes = []
     permission_classes = []
@@ -451,7 +707,8 @@ class LoginView(APIView):
                 'token': token.key,
                 'username': user.username,
                 'email': user.email,
-                'is_staff': user.is_staff
+                'is_staff': user.is_staff,
+                'is_collector': is_collector(user),
             })
         return Response({'error': 'Credenciales inválidas. Verifica tu usuario y contraseña.'}, status=status.HTTP_401_UNAUTHORIZED)
 
@@ -703,6 +960,7 @@ class GoogleAuthView(APIView):
             'username': user.username,
             'email': user.email,
             'is_staff': user.is_staff,
+            'is_collector': is_collector(user),
             'full_name': user.get_full_name() or user.username,
             'photo_url': picture
         }, status=status.HTTP_200_OK)
@@ -1578,6 +1836,7 @@ class UserProfileView(APIView):
             "username": user.username,
             "email": user.email,
             "is_staff": user.is_staff,
+            "is_collector": is_collector(user),
             "eco_points": eco_points,
             "rank": rank,
             "level": level,

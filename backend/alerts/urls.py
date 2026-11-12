@@ -3,6 +3,9 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     AlertViewSet,
     WastePointViewSet,
+    CollectionRouteViewSet,
+    TruckViewSet,
+    RouteRunViewSet,
     SyncMapDataView,
     SystemSettingsView,
     TestGeminiView,
@@ -17,6 +20,9 @@ from .views import (
 router = DefaultRouter()
 router.register(r'alerts', AlertViewSet, basename='alert')
 router.register(r'waste-points', WastePointViewSet, basename='waste-point')
+router.register(r'routes', CollectionRouteViewSet, basename='collection-route')
+router.register(r'trucks', TruckViewSet, basename='truck')
+router.register(r'runs', RouteRunViewSet, basename='route-run')
 
 urlpatterns = [
     path('sync/', SyncMapDataView.as_view(), name='sync_map_data'),

@@ -229,6 +229,7 @@ REST_FRAMEWORK = {
         "gemini_user_day": "25/day",
         "gemini_ip": "6/minute",
         "register": "10/hour",
+        "gps_ingest": "120/minute",
     },
 }
 

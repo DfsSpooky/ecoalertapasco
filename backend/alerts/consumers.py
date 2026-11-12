@@ -7,8 +7,8 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
-from .models import Alert, WastePoint
-from .serializers import AlertSerializer, WastePointSerializer
+from .models import Alert, CollectionRoute, WastePoint
+from .serializers import AlertSerializer, CollectionRouteSerializer, WastePointSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +90,25 @@ def build_map_snapshot(user_id: int | None) -> dict:
         context={"confirmed_alert_ids": confirmed_ids},
     ).data
     waste_data = WastePointSerializer(waste_qs, many=True).data
+    routes_qs = (
+        CollectionRoute.objects.filter(is_active=True)
+        .select_related("default_truck")
+        .prefetch_related("stops")
+        .order_by("name")
+    )
+    routes_data = CollectionRouteSerializer(routes_qs, many=True).data
+
+    # Import diferido: tracking importa LIVE_MAP_GROUP desde este módulo
+    from .tracking import public_open_runs_queryset, public_run_payload
+
+    truck_runs = [public_run_payload(r) for r in public_open_runs_queryset()]
 
     return {
         "type": "initial_snapshot",
         "alerts": alerts_data,
         "waste_points": waste_data,
+        "routes": routes_data,
+        "truck_runs": truck_runs,
         "server_time": timezone.now().isoformat(),
     }
 
@@ -206,3 +220,28 @@ class MapLiveConsumer(AsyncJsonWebsocketConsumer):
                 "id": str(event["id"]),
             }
         )
+
+    async def map_route_upserted(self, event):
+        await self.send_json(
+            {
+                "type": "route_upserted",
+                "route": event["route"],
+            }
+        )
+
+    async def map_route_deleted(self, event):
+        await self.send_json(
+            {
+                "type": "route_deleted",
+                "id": str(event["id"]),
+            }
+        )
+
+    async def map_truck_run_upserted(self, event):
+        await self.send_json({"type": "truck_run_upserted", "run": event["run"]})
+
+    async def map_truck_run_ended(self, event):
+        await self.send_json({"type": "truck_run_ended", "id": str(event["id"])})
+
+    async def map_truck_position(self, event):
+        await self.send_json({"type": "truck_position", "position": event["position"]})

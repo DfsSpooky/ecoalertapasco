@@ -6,8 +6,8 @@ from django.db.models.signals import m2m_changed, post_delete, post_save
 from django.dispatch import receiver
 
 from .consumers import LIVE_MAP_GROUP
-from .models import Alert, WastePoint
-from .serializers import AlertSerializer, WastePointSerializer
+from .models import Alert, CollectionRoute, RouteStop, WastePoint
+from .serializers import AlertSerializer, CollectionRouteSerializer, WastePointSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -107,3 +107,73 @@ def on_waste_point_deleted(sender, instance: WastePoint, **kwargs):
             }
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Rutas de recolección: publicación en vivo al mapa ciudadano
+# ---------------------------------------------------------------------------
+
+def broadcast_route_by_id(route_id: int) -> None:
+    route = (
+        CollectionRoute.objects.select_related("default_truck")
+        .prefetch_related("stops")
+        .filter(pk=route_id)
+        .first()
+    )
+    if not route:
+        return
+    if not route.is_active:
+        # Ruta retirada / en borrador: los ciudadanos deben dejar de verla
+        _send_group_event({"type": "map.route.deleted", "id": str(route_id)})
+        return
+    _send_group_event(
+        {
+            "type": "map.route.upserted",
+            "route": CollectionRouteSerializer(route).data,
+        }
+    )
+
+
+def _schedule_route_broadcast(route_id: int) -> None:
+    """
+    Agrupa todos los cambios de una ruta (y sus paradas) en un solo evento por transacción.
+    A diferencia de un set simple, si la transacción se revierte el callback desaparece de
+    `connection.run_on_commit` y la ruta vuelve a poder difundirse en la siguiente transacción.
+    """
+    pending = getattr(connection, "_eco_ws_route_callbacks", None)
+    if pending is None:
+        pending = {}
+        connection._eco_ws_route_callbacks = pending
+
+    existing = pending.get(route_id)
+    if existing is not None and any(cb is existing for _, cb, *_ in getattr(connection, "run_on_commit", [])):
+        return
+
+    def _flush():
+        if pending.get(route_id) is _flush:
+            pending.pop(route_id, None)
+        broadcast_route_by_id(route_id)
+
+    pending[route_id] = _flush
+    transaction.on_commit(_flush)
+
+
+@receiver(post_save, sender=CollectionRoute)
+def on_route_saved(sender, instance: CollectionRoute, **kwargs):
+    if instance.pk:
+        _schedule_route_broadcast(instance.pk)
+
+
+@receiver(post_delete, sender=CollectionRoute)
+def on_route_deleted(sender, instance: CollectionRoute, **kwargs):
+    route_id = str(instance.pk)
+    transaction.on_commit(
+        lambda: _send_group_event({"type": "map.route.deleted", "id": route_id})
+    )
+
+
+@receiver(post_save, sender=RouteStop)
+@receiver(post_delete, sender=RouteStop)
+def on_route_stop_changed(sender, instance: RouteStop, **kwargs):
+    if instance.route_id and CollectionRoute.objects.filter(pk=instance.route_id).exists():
+        _schedule_route_broadcast(instance.route_id)

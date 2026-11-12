@@ -199,6 +199,9 @@ pub struct AuthUser {
     pub email: Option<String>,
     #[serde(default)]
     pub is_staff: bool,
+    /// Conductor de camión recolector (grupo `recolectores` en el backend)
+    #[serde(default)]
+    pub is_collector: bool,
     #[serde(default)]
     pub photo_url: Option<String>,
     #[serde(default)]
@@ -318,6 +321,10 @@ pub enum WsServerMessage {
         alerts: Vec<EcoAlert>,
         waste_points: Vec<WastePoint>,
         #[serde(default)]
+        routes: Vec<CollectionRoute>,
+        #[serde(default)]
+        truck_runs: Vec<TruckRun>,
+        #[serde(default)]
         #[allow(dead_code)]
         server_time: Option<String>,
     },
@@ -332,6 +339,21 @@ pub enum WsServerMessage {
     },
     WastePointDeleted {
         id: String,
+    },
+    RouteUpserted {
+        route: CollectionRoute,
+    },
+    RouteDeleted {
+        id: String,
+    },
+    TruckRunUpserted {
+        run: TruckRun,
+    },
+    TruckRunEnded {
+        id: String,
+    },
+    TruckPosition {
+        position: TruckPositionUpdate,
     },
     AuthInvalid,
     Pong {
@@ -348,6 +370,10 @@ pub struct SyncResponse {
     pub etag: String,
     pub alerts: Vec<EcoAlert>,
     pub waste_points: Vec<WastePoint>,
+    #[serde(default)]
+    pub routes: Vec<CollectionRoute>,
+    #[serde(default)]
+    pub truck_runs: Vec<TruckRun>,
     #[serde(default)]
     #[allow(dead_code)]
     pub server_time: Option<String>,
@@ -481,13 +507,72 @@ impl WastePoint {
     }
 }
 
-pub const TRUCK_ROUTE_POINTS: &[(f64, f64)] = &[
-    (-10.6625, -76.2555), // Plaza Yanacancha
-    (-10.6640, -76.2530), // Av. Los Próceres
-    (-10.6685, -76.2580), // Hospital Huariaca
-    (-10.6705, -76.2600), // Av. Bolívar Central
-    (-10.6720, -76.2625), // Plaza Quiulacocha
-];
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RouteStop {
+    pub id: serde_json::Value,
+    #[serde(default)]
+    pub order: u32,
+    pub name: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    #[serde(default)]
+    pub waste_point: Option<i64>,
+    #[serde(default)]
+    pub eta_offset_minutes: u32,
+}
+
+/// Ruta de recolección planificada por la autoridad (publicada desde `/api/routes/`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CollectionRoute {
+    pub id: serde_json::Value,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub district: String,
+    #[serde(default)]
+    pub district_display: String,
+    #[serde(default)]
+    pub waste_type: String,
+    #[serde(default = "default_route_color")]
+    pub color: String,
+    #[serde(default)]
+    pub schedule: String,
+    #[serde(default)]
+    pub path: Vec<(f64, f64)>,
+    #[serde(default)]
+    pub default_truck_code: Option<String>,
+    #[serde(default)]
+    pub stops: Vec<RouteStop>,
+    #[serde(default)]
+    pub waypoints: Vec<(f64, f64)>,
+    #[serde(default)]
+    pub snap_to_roads: bool,
+    #[serde(default)]
+    pub default_truck: Option<i64>,
+    #[serde(default = "default_true")]
+    pub is_active: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_route_color() -> String {
+    "#16a34a".to_string()
+}
+
+impl CollectionRoute {
+    pub fn id_string(&self) -> String {
+        if let Some(s) = self.id.as_str() {
+            s.to_string()
+        } else if let Some(n) = self.id.as_i64() {
+            n.to_string()
+        } else {
+            self.id.to_string()
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiAnalysisResponse {
@@ -607,4 +692,157 @@ pub struct UserProfile {
     pub total_confirmations_given: u32,
     #[serde(default)]
     pub medals: Vec<UserMedal>,
+}
+
+
+/// Turno abierto de un camión recolector, tal como lo ve la ciudadanía (sin conductor ni placa).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TruckRun {
+    pub id: i64,
+    pub route: i64,
+    #[serde(default)]
+    pub route_name: String,
+    #[serde(default)]
+    pub route_color: String,
+    pub truck_code: String,
+    #[serde(default)]
+    pub waste_type: String,
+    pub status: String,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub last_latitude: Option<f64>,
+    #[serde(default)]
+    pub last_longitude: Option<f64>,
+    #[serde(default)]
+    pub last_heading: Option<f64>,
+    #[serde(default)]
+    pub last_speed_kmh: Option<f64>,
+    #[serde(default)]
+    pub last_position_at: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct TruckPositionUpdate {
+    pub run_id: i64,
+    pub latitude: f64,
+    pub longitude: f64,
+    #[serde(default)]
+    pub heading: Option<f64>,
+    #[serde(default)]
+    pub speed_kmh: Option<f64>,
+    #[serde(default)]
+    pub at: Option<String>,
+}
+
+/// Turno visto por el propio conductor (`/api/runs/`).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct DriverRun {
+    pub id: i64,
+    pub route: i64,
+    #[serde(default)]
+    pub route_name: String,
+    pub truck: i64,
+    #[serde(default)]
+    pub truck_code: String,
+    pub status: String,
+    #[serde(default)]
+    pub started_at: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct DriverTruck {
+    pub id: i64,
+    pub code: String,
+    #[serde(default)]
+    pub plate: String,
+    #[serde(default)]
+    pub waste_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct DriverContext {
+    #[serde(default)]
+    pub trucks: Vec<DriverTruck>,
+    #[serde(default)]
+    pub routes: Vec<CollectionRoute>,
+    #[serde(default)]
+    pub open_run: Option<DriverRun>,
+}
+
+/// Estado del rastreador GPS en JS (`window.ecoTracker.state`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct TrackerStatus {
+    #[serde(default)]
+    pub tracking: bool,
+    #[serde(default)]
+    pub gps: String,
+    #[serde(default)]
+    pub accuracy: Option<f64>,
+    #[serde(default)]
+    pub last_fix_at: Option<f64>,
+    #[serde(default)]
+    pub last_sent_at: Option<f64>,
+    #[serde(default)]
+    pub pending: u32,
+    #[serde(default)]
+    pub wake_lock: bool,
+    #[serde(default)]
+    pub server_status: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+
+/// Estado del editor de rutas en JS (`window.ecoRouteEditor`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct RouteEditorState {
+    #[serde(default)]
+    pub waypoints: Vec<(f64, f64)>,
+    #[serde(default)]
+    pub path: Vec<(f64, f64)>,
+    #[serde(default)]
+    pub stops: Vec<EditorStop>,
+    #[serde(default)]
+    pub snap: bool,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub distance_m: Option<f64>,
+    #[serde(default)]
+    pub duration_s: Option<f64>,
+    #[serde(default)]
+    pub snapping: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub can_undo: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EditorStop {
+    pub name: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    #[serde(default)]
+    pub waste_point: Option<i64>,
+    #[serde(default)]
+    pub eta_offset_minutes: u32,
+}
+
+/// Camión con datos completos (vista de autoridad en `/api/trucks/`).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct FleetTruck {
+    pub id: i64,
+    pub code: String,
+    #[serde(default)]
+    pub plate: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub waste_type: String,
+    #[serde(default)]
+    pub driver_username: Option<String>,
+    #[serde(default)]
+    pub is_active: bool,
 }

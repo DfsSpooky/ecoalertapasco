@@ -46,6 +46,7 @@ source venv/bin/activate # En Windows: venv\Scripts\activate
 pip install -r requirements.txt
 python manage.py migrate
 python manage.py seed_waste_points --if-empty
+python manage.py seed_collection_routes --if-empty
 python manage.py runserver
 ```
 
@@ -67,6 +68,19 @@ cd frontend-wasm
 trunk serve
 ```
 La aplicación estará disponible en `http://localhost:8080`.
+
+---
+
+## 🚛 Rutas y Seguimiento de Camiones Recolectores
+
+- **Autoridad** (Panel de Autoridades → *Rutas y Flota*): traza rutas sobre el mapa, añade paradas (enlazables a puntos de acopio), estima tiempos y publica/retira rutas. Ve la flota en vivo y puede finalizar recorridos.
+- **Conductor**: cuenta en el grupo `recolectores` con un camión asignado (Django admin → *Camiones Recolectores*). En la app usa **Modo Recolector** para iniciar el recorrido y compartir su GPS (requiere HTTPS y mantener la app abierta).
+- **Ciudadanía**: ve los camiones moverse en tiempo real por WebSocket (`truck_position`), sin datos del conductor ni placa.
+
+### Ajuste a calles (OSRM)
+El editor ajusta las rutas a la red vial consultando un servidor [OSRM](https://project-osrm.org/) desde el backend (`POST /api/routes/snap/`).
+Por defecto usa el servidor público de demostración `https://router.project-osrm.org`, **que no es apto para producción** (sin garantías y con límite de uso).
+Para producción, levanta un OSRM propio con el extracto de Perú de OpenStreetMap y configura su URL con la variable `OSRM_URL` o el parámetro `osrm_url` en *Configuraciones del Sistema* del admin.
 
 ---
 

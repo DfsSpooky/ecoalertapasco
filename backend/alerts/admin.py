@@ -1,5 +1,5 @@
 from django.contrib import admin, messages
-from .models import Alert, WastePoint, SystemConfig
+from .models import Alert, WastePoint, SystemConfig, Truck, CollectionRoute, RouteStop, RouteRun, TruckPosition
 
 admin.site.site_header = "EcoAlerta Pasco - Administración Municipal"
 admin.site.site_title = "EcoAlerta Admin"
@@ -217,3 +217,57 @@ class WastePointAdmin(admin.ModelAdmin):
     search_fields = ('name', 'address', 'description')
 
 
+
+
+# ---------------------------------------------------------------------------
+# Flota y rutas de recolección
+# ---------------------------------------------------------------------------
+
+@admin.register(Truck)
+class TruckAdmin(admin.ModelAdmin):
+    list_display = ('code', 'plate', 'waste_type', 'driver', 'is_active')
+    list_filter = ('is_active', 'waste_type')
+    search_fields = ('code', 'plate', 'description', 'driver__username')
+    autocomplete_fields = ('driver',)
+
+
+class RouteStopInline(admin.TabularInline):
+    model = RouteStop
+    extra = 1
+    fields = ('order', 'name', 'latitude', 'longitude', 'waste_point', 'eta_offset_minutes')
+    autocomplete_fields = ('waste_point',)
+
+
+@admin.register(CollectionRoute)
+class CollectionRouteAdmin(admin.ModelAdmin):
+    list_display = ('name', 'district', 'waste_type', 'schedule', 'default_truck', 'is_active', 'vertex_count', 'updated_at')
+    list_filter = ('is_active', 'district', 'waste_type')
+    search_fields = ('name', 'description', 'schedule')
+    inlines = [RouteStopInline]
+    readonly_fields = ('created_at', 'updated_at')
+
+    @admin.display(description="Vértices")
+    def vertex_count(self, obj):
+        return len(obj.path or [])
+
+
+class TruckPositionInline(admin.TabularInline):
+    model = TruckPosition
+    extra = 0
+    can_delete = False
+    fields = ('recorded_at', 'latitude', 'longitude', 'accuracy_m', 'speed_kmh', 'heading')
+    readonly_fields = fields
+    ordering = ('-recorded_at',)
+    max_num = 0
+    show_change_link = False
+
+
+@admin.register(RouteRun)
+class RouteRunAdmin(admin.ModelAdmin):
+    list_display = ('truck', 'route', 'driver', 'status', 'started_at', 'ended_at', 'last_position_at')
+    list_filter = ('status', 'route', 'truck')
+    search_fields = ('truck__code', 'route__name', 'driver__username')
+    readonly_fields = (
+        'started_at', 'last_latitude', 'last_longitude', 'last_heading', 'last_speed_kmh', 'last_position_at',
+    )
+    inlines = [TruckPositionInline]
