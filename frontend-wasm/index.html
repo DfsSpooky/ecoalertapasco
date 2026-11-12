@@ -178,6 +178,14 @@
       -webkit-tap-highlight-color: transparent;
     }
 
+    @keyframes ecoTruckPulse {
+      0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.45); border-radius: 9999px; }
+      70% { box-shadow: 0 0 0 14px rgba(22, 163, 74, 0); border-radius: 9999px; }
+      100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); border-radius: 9999px; }
+    }
+    .eco-truck-live > div:nth-last-child(2) { animation: ecoTruckPulse 2s infinite; }
+    .eco-truck-marker { background: transparent; border: none; }
+    .eco-route-wp, .eco-route-stop { background: transparent; border: none; }
     .leaflet-bar {
       border: none !important;
       border-radius: 12px !important;
@@ -677,28 +685,153 @@
         });
       },
 
-      renderTruckRoute: function(coords, visible) {
+      collectionRoutesLayer: null,
+
+      _escapeHtml: function(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      },
+
+      // Rutas de recolección oficiales publicadas por la autoridad (desde la BD, en vivo)
+      renderCollectionRoutes: function(routes, visible) {
         if (!this.map) return;
-        if (this.truckRouteLayer) {
-          this.map.removeLayer(this.truckRouteLayer);
-          this.truckRouteLayer = null;
+        if (this.collectionRoutesLayer) {
+          this.map.removeLayer(this.collectionRoutesLayer);
+          this.collectionRoutesLayer = null;
         }
+        if (!visible || !routes || routes.length === 0) return;
 
-        if (!visible || !coords || coords.length === 0) return;
+        const esc = this._escapeHtml;
+        const layer = L.layerGroup();
+        routes.forEach(route => {
+          const color = /^#[0-9a-fA-F]{6}$/.test(route.color || '') ? route.color : '#16a34a';
+          const latLngs = (route.path || []).map(c => [c[0], c[1]]);
+          if (latLngs.length >= 2) {
+            const line = L.polyline(latLngs, {
+              color: color,
+              weight: 4.5,
+              opacity: 0.75,
+              dashArray: '8, 8',
+              lineCap: 'round',
+              lineJoin: 'round'
+            });
+            const truck = route.default_truck_code ? ` · Camión ${esc(route.default_truck_code)}` : '';
+            line.bindTooltip(
+              `🚛 <b>${esc(route.name)}</b>${truck}<br><span style="font-size:10px; opacity:0.85;">🕒 ${esc(route.schedule || 'Horario municipal')}</span>`,
+              { sticky: true, direction: 'top' }
+            );
+            layer.addLayer(line);
+          }
 
-        const latLngs = coords.map(c => [c[0], c[1]]);
-        this.truckRouteLayer = L.polyline(latLngs, {
-          color: '#16a34a',
-          weight: 4.5,
-          opacity: 0.7,
-          dashArray: '8, 8',
-          lineCap: 'round',
-          lineJoin: 'round'
-        }).addTo(this.map);
+          (route.stops || []).forEach((stop, idx) => {
+            const dot = L.circleMarker([stop.latitude, stop.longitude], {
+              radius: 5,
+              color: '#ffffff',
+              weight: 2,
+              fillColor: color,
+              fillOpacity: 1
+            });
+            const eta = stop.eta_offset_minutes ? ` · +${stop.eta_offset_minutes} min` : '';
+            dot.bindTooltip(
+              `<b>Parada ${idx + 1}: ${esc(stop.name)}</b><br><span style="font-size:10px;">${esc(route.name)}${eta}</span>`,
+              { direction: 'top' }
+            );
+            layer.addLayer(dot);
+          });
+        });
+        this.collectionRoutesLayer = layer.addTo(this.map);
+      },
 
-        this.truckRouteLayer.bindTooltip("🚛 Ruta del Camión Recolector Municipal", {
-          sticky: true,
-          direction: 'top'
+      // Camiones recolectores en vivo (turnos abiertos). Siempre visibles: es lo que el vecino quiere ver.
+      trucksLayer: null,
+      truckMarkers: {},
+
+      _truckIcon: function(run) {
+        const esc = this._escapeHtml;
+        const color = /^#[0-9a-fA-F]{6}$/.test(run.route_color || '') ? run.route_color : '#16a34a';
+        const ageS = run.last_position_at ? (Date.now() - Date.parse(run.last_position_at)) / 1000 : Infinity;
+        const stale = ageS > 180;
+        const paused = run.status === 'paused';
+        const dim = (stale || paused) ? 'opacity:0.55; filter:grayscale(0.6);' : '';
+        const arrow = (typeof run.last_heading === 'number' && !paused && !stale)
+          ? `<div style="position:absolute; inset:-9px; transform:rotate(${run.last_heading}deg); pointer-events:none;"><div style="width:0; height:0; margin:0 auto; border-left:6px solid transparent; border-right:6px solid transparent; border-bottom:9px solid ${color};"></div></div>`
+          : '';
+        const pulse = (!stale && !paused) ? 'eco-truck-live' : '';
+        return L.divIcon({
+          className: 'eco-truck-marker',
+          html: `<div class="${pulse}" style="position:relative; width:36px; height:36px; ${dim}">
+                   ${arrow}
+                   <div style="width:36px; height:36px; border-radius:9999px; background:#ffffff; border:3px solid ${color}; box-shadow:0 4px 14px rgba(0,0,0,0.3); display:flex; align-items:center; justify-content:center; font-size:18px;">🚛</div>
+                   <div style="position:absolute; left:50%; top:38px; transform:translateX(-50%); background:${color}; color:#fff; font-size:9px; font-weight:800; padding:1px 5px; border-radius:6px; white-space:nowrap;">${esc(run.truck_code)}</div>
+                 </div>`,
+          iconSize: [36, 36],
+          iconAnchor: [18, 18]
+        });
+      },
+
+      _truckTooltip: function(run) {
+        const esc = this._escapeHtml;
+        let when = 'sin posición aún';
+        if (run.last_position_at) {
+          const s = Math.max(0, Math.round((Date.now() - Date.parse(run.last_position_at)) / 1000));
+          when = s < 60 ? `hace ${s} s` : `hace ${Math.round(s / 60)} min`;
+        }
+        let state = '🟢 En recorrido';
+        if (run.status === 'paused') state = '⏸️ En pausa';
+        else if (run.last_position_at && (Date.now() - Date.parse(run.last_position_at)) > 180000) state = '📡 Sin señal GPS';
+        const speed = (typeof run.last_speed_kmh === 'number' && run.status === 'active') ? ` · ${Math.round(run.last_speed_kmh)} km/h` : '';
+        return `<b>🚛 Camión ${esc(run.truck_code)}</b><br><span style="font-size:10px;">${esc(run.route_name)}</span><br><span style="font-size:10px; opacity:0.85;">${state}${speed} · ${when}</span>`;
+      },
+
+      _animateMarker: function(marker, toLatLng, durationMs) {
+        const from = marker.getLatLng();
+        const start = performance.now();
+        if (marker._ecoAnim) cancelAnimationFrame(marker._ecoAnim);
+        const step = (now) => {
+          const t = Math.min(1, (now - start) / durationMs);
+          const e = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+          marker.setLatLng([from.lat + (toLatLng[0] - from.lat) * e, from.lng + (toLatLng[1] - from.lng) * e]);
+          if (t < 1) marker._ecoAnim = requestAnimationFrame(step);
+          else marker._ecoAnim = null;
+        };
+        marker._ecoAnim = requestAnimationFrame(step);
+      },
+
+      renderTrucks: function(runs) {
+        if (!this.map) return;
+        if (!this.trucksLayer) this.trucksLayer = L.layerGroup().addTo(this.map);
+        const seen = new Set();
+        (runs || []).forEach(run => {
+          if (typeof run.last_latitude !== 'number' || typeof run.last_longitude !== 'number') return;
+          const key = String(run.id);
+          seen.add(key);
+          const target = [run.last_latitude, run.last_longitude];
+          const iconKey = [run.status, run.route_color, run.truck_code, run.last_heading, run.last_position_at && (Date.now() - Date.parse(run.last_position_at)) > 180000].join('|');
+          let marker = this.truckMarkers[key];
+          if (!marker) {
+            marker = L.marker(target, { icon: this._truckIcon(run), zIndexOffset: 1100 });
+            marker._ecoIconKey = iconKey;
+            marker.bindTooltip(this._truckTooltip(run), { direction: 'top', offset: [0, -16] });
+            this.trucksLayer.addLayer(marker);
+            this.truckMarkers[key] = marker;
+          } else {
+            const cur = marker.getLatLng();
+            if (Math.abs(cur.lat - target[0]) > 1e-7 || Math.abs(cur.lng - target[1]) > 1e-7) {
+              this._animateMarker(marker, target, 1200);
+            }
+            if (marker._ecoIconKey !== iconKey) {
+              marker.setIcon(this._truckIcon(run));
+              marker._ecoIconKey = iconKey;
+            }
+            marker.setTooltipContent(this._truckTooltip(run));
+          }
+        });
+        Object.keys(this.truckMarkers).forEach(key => {
+          if (!seen.has(key)) {
+            this.trucksLayer.removeLayer(this.truckMarkers[key]);
+            delete this.truckMarkers[key];
+          }
         });
       },
 
@@ -1235,6 +1368,609 @@
         } else {
           window.print();
         }
+      }
+    };
+
+    // =====================================================================
+    // Editor de rutas de recolección (panel de autoridades)
+    // Mapa Leaflet propio: puntos de control arrastrables, ajuste a calles
+    // vía backend (OSRM) y paradas enlazables a puntos de acopio.
+    // =====================================================================
+    window.ecoRouteEditor = {
+      map: null,
+      layers: null,
+      waypoints: [],
+      path: [],
+      stops: [],
+      wastePoints: [],
+      snap: false,
+      color: '#16a34a',
+      mode: 'route',
+      token: null,
+      distance_m: null,
+      duration_s: null,
+      snapping: false,
+      error: null,
+      history: [],
+      _snapTimer: null,
+      _snapSeq: 0,
+      LINK_RADIUS_M: 80,
+
+      _apiBase: function() {
+        return (window.__ECOALERTA_API_BASE__ || window.location.origin).replace(/\/+$/, '');
+      },
+      _esc: function(v) { return window.ecoMap._escapeHtml(v); },
+
+      _dist: function(a, b) {
+        const R = 6371000, toR = Math.PI / 180;
+        const dLat = (b[0] - a[0]) * toR, dLng = (b[1] - a[1]) * toR;
+        const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * toR) * Math.cos(b[0] * toR) * Math.sin(dLng / 2) ** 2;
+        return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+      },
+
+      _pathLength: function(path) {
+        let d = 0;
+        for (let i = 1; i < path.length; i++) d += this._dist(path[i - 1], path[i]);
+        return d;
+      },
+
+      // Proyecta un punto sobre el trazo y devuelve la distancia recorrida hasta él (m)
+      _alongPath: function(pt) {
+        const path = this.path;
+        if (path.length < 2) return 0;
+        let best = { d: Infinity, along: 0 }, acc = 0;
+        const cosLat = Math.cos(pt[0] * Math.PI / 180);
+        for (let i = 1; i < path.length; i++) {
+          const a = path[i - 1], b = path[i];
+          const ax = a[1] * cosLat, ay = a[0], bx = b[1] * cosLat, by = b[0], px = pt[1] * cosLat, py = pt[0];
+          const dx = bx - ax, dy = by - ay;
+          const len2 = dx * dx + dy * dy;
+          const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+          const proj = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+          const d = this._dist(pt, proj);
+          const segLen = this._dist(a, b);
+          if (d < best.d) best = { d: d, along: acc + segLen * t };
+          acc += segLen;
+        }
+        return best.along;
+      },
+
+      _nearestWastePoint: function(lat, lng) {
+        let best = null, bestD = this.LINK_RADIUS_M;
+        this.wastePoints.forEach(wp => {
+          const d = this._dist([lat, lng], [wp.latitude, wp.longitude]);
+          if (d <= bestD) { best = wp; bestD = d; }
+        });
+        return best;
+      },
+
+      _snapshot: function() {
+        this.history.push(JSON.stringify({ w: this.waypoints, s: this.stops }));
+        if (this.history.length > 50) this.history.shift();
+      },
+
+      _emit: function() {
+        if (typeof window.onRouteEditorChange !== 'function') return;
+        const state = {
+          waypoints: this.waypoints,
+          path: this.path,
+          stops: this.stops,
+          snap: this.snap,
+          mode: this.mode,
+          distance_m: this.distance_m,
+          duration_s: this.duration_s,
+          snapping: this.snapping,
+          error: this.error,
+          can_undo: this.history.length > 0
+        };
+        try { window.onRouteEditorChange(JSON.stringify(state)); } catch (e) {}
+      },
+
+      init: function(elementId, opts) {
+        this.destroy();
+        const el = document.getElementById(elementId);
+        if (!el) return;
+        opts = opts || {};
+        this.token = opts.token || null;
+        this.color = /^#[0-9a-fA-F]{6}$/.test(opts.color || '') ? opts.color : '#16a34a';
+        this.snap = !!opts.snap;
+        this.wastePoints = opts.waste_points || [];
+        this.path = (opts.path || []).map(p => [p[0], p[1]]);
+        this.waypoints = (opts.waypoints && opts.waypoints.length ? opts.waypoints : opts.path || []).map(p => [p[0], p[1]]);
+        // Rutas antiguas sin puntos de control: usar el trazo si es corto, si no simplificar tomando ~1 de cada N
+        if ((!opts.waypoints || !opts.waypoints.length) && this.waypoints.length > 40) {
+          const step = Math.ceil(this.waypoints.length / 40);
+          const last = this.waypoints[this.waypoints.length - 1];
+          this.waypoints = this.waypoints.filter((_, i) => i % step === 0);
+          if (this.waypoints[this.waypoints.length - 1] !== last) this.waypoints.push(last);
+        }
+        if (!this.snap) this.path = this.waypoints.slice();
+        this.stops = (opts.stops || []).map(s => ({
+          name: s.name, latitude: s.latitude, longitude: s.longitude,
+          waste_point: s.waste_point == null ? null : s.waste_point,
+          eta_offset_minutes: s.eta_offset_minutes || 0
+        }));
+        this.mode = 'route';
+        this.history = [];
+        this.error = null;
+        this.snapping = false;
+        this.distance_m = this.path.length > 1 ? this._pathLength(this.path) : null;
+        this.duration_s = null;
+
+        this.map = L.map(el, { zoomControl: true, attributionControl: true, doubleClickZoom: false })
+          .setView([-10.6675, -76.2567], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19, attribution: '© OpenStreetMap contributors'
+        }).addTo(this.map);
+        this.layers = {
+          waste: L.layerGroup().addTo(this.map),
+          path: L.layerGroup().addTo(this.map),
+          waypoints: L.layerGroup().addTo(this.map),
+          stops: L.layerGroup().addTo(this.map)
+        };
+        this.map.on('click', (e) => this._onMapClick(e));
+        this._renderWastePoints();
+        this.render();
+        this.fit();
+        setTimeout(() => this.map && this.map.invalidateSize(), 120);
+        this._emit();
+      },
+
+      destroy: function() {
+        if (this._snapTimer) clearTimeout(this._snapTimer);
+        if (this.map) { this.map.remove(); }
+        this.map = null;
+        this.layers = null;
+      },
+
+      fit: function() {
+        if (!this.map) return;
+        const pts = this.path.concat(this.waypoints, this.stops.map(s => [s.latitude, s.longitude]));
+        if (pts.length >= 2) this.map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 17 });
+        else if (pts.length === 1) this.map.setView(pts[0], 17);
+      },
+
+      setMode: function(mode) {
+        this.mode = mode === 'stops' ? 'stops' : 'route';
+        if (this.map) this.map.getContainer().style.cursor = 'crosshair';
+        this._emit();
+      },
+
+      setColor: function(color) {
+        if (/^#[0-9a-fA-F]{6}$/.test(color || '')) { this.color = color; this.render(); }
+      },
+
+      setSnap: function(on) {
+        this.snap = !!on;
+        this._recompute();
+      },
+
+      _onMapClick: function(e) {
+        const lat = +e.latlng.lat.toFixed(6), lng = +e.latlng.lng.toFixed(6);
+        this._snapshot();
+        if (this.mode === 'stops') {
+          this._addStop(lat, lng, null);
+        } else {
+          this.waypoints.push([lat, lng]);
+          this._recompute();
+        }
+      },
+
+      _addStop: function(lat, lng, wastePoint) {
+        const wp = wastePoint || this._nearestWastePoint(lat, lng);
+        this.stops.push({
+          name: wp ? wp.name : `Parada ${this.stops.length + 1}`,
+          latitude: wp ? wp.latitude : lat,
+          longitude: wp ? wp.longitude : lng,
+          waste_point: wp ? Number(wp.id) : null,
+          eta_offset_minutes: 0
+        });
+        this.render();
+        this._emit();
+      },
+
+      // Inserta un punto de control en el tramo del trazo más cercano al clic
+      _insertWaypointOnPath: function(lat, lng) {
+        if (this.waypoints.length < 2) { this.waypoints.push([lat, lng]); return; }
+        const along = this._alongPath([lat, lng]);
+        let insertAt = this.waypoints.length - 1;
+        for (let i = 1; i < this.waypoints.length; i++) {
+          if (this._alongPath(this.waypoints[i]) >= along) { insertAt = i; break; }
+        }
+        this.waypoints.splice(insertAt, 0, [lat, lng]);
+      },
+
+      removeWaypoint: function(idx) {
+        this._snapshot();
+        this.waypoints.splice(idx, 1);
+        this._recompute();
+      },
+
+      updateStop: function(idx, patch) {
+        if (!this.stops[idx]) return;
+        Object.assign(this.stops[idx], patch || {});
+        this.render();
+        this._emit();
+      },
+
+      removeStop: function(idx) {
+        this._snapshot();
+        this.stops.splice(idx, 1);
+        this.render();
+        this._emit();
+      },
+
+      moveStop: function(idx, delta) {
+        const j = idx + delta;
+        if (j < 0 || j >= this.stops.length) return;
+        this._snapshot();
+        const t = this.stops[idx]; this.stops[idx] = this.stops[j]; this.stops[j] = t;
+        this.render();
+        this._emit();
+      },
+
+      reverse: function() {
+        this._snapshot();
+        this.waypoints.reverse();
+        this.stops.reverse();
+        this._recompute();
+      },
+
+      clearRoute: function() {
+        this._snapshot();
+        this.waypoints = [];
+        this._recompute();
+      },
+
+      undo: function() {
+        const prev = this.history.pop();
+        if (!prev) return;
+        const st = JSON.parse(prev);
+        this.waypoints = st.w; this.stops = st.s;
+        this._recompute();
+      },
+
+      // Ordena las paradas según su posición sobre el trazo y estima minutos desde el inicio
+      computeEtas: function(speedKmh, dwellMin) {
+        if (this.path.length < 2 || this.stops.length === 0) return;
+        this._snapshot();
+        const speed = Math.max(3, Number(speedKmh) || 12) / 3.6; // m/s
+        const dwell = Math.max(0, Number(dwellMin) || 0);
+        const withAlong = this.stops.map(s => ({ s: s, along: this._alongPath([s.latitude, s.longitude]) }));
+        withAlong.sort((a, b) => a.along - b.along);
+        this.stops = withAlong.map((x, i) => Object.assign({}, x.s, {
+          eta_offset_minutes: Math.round(x.along / speed / 60 + i * dwell)
+        }));
+        this.render();
+        this._emit();
+      },
+
+      _recompute: function() {
+        this.error = null;
+        if (!this.snap || this.waypoints.length < 2) {
+          this.path = this.waypoints.slice();
+          this.distance_m = this.path.length > 1 ? this._pathLength(this.path) : null;
+          this.duration_s = null;
+          this.snapping = false;
+          this.render();
+          this._emit();
+          return;
+        }
+        // Vista previa inmediata con líneas rectas; el trazo por calles llega tras el debounce
+        this.path = this.waypoints.slice();
+        this.snapping = true;
+        this.render();
+        this._emit();
+        if (this._snapTimer) clearTimeout(this._snapTimer);
+        this._snapTimer = setTimeout(() => this._requestSnap(), 450);
+      },
+
+      _requestSnap: async function() {
+        const seq = ++this._snapSeq;
+        const waypoints = this.waypoints.slice();
+        try {
+          const res = await fetch(`${this._apiBase()}/api/routes/snap/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Token ${this.token}` },
+            body: JSON.stringify({ waypoints: waypoints })
+          });
+          const body = await res.json().catch(() => ({}));
+          if (seq !== this._snapSeq || !this.map) return;
+          if (res.ok && Array.isArray(body.path)) {
+            this.path = body.path;
+            this.distance_m = body.distance_m;
+            this.duration_s = body.duration_s;
+            this.error = null;
+          } else {
+            this.error = body.error || `No se pudo ajustar a calles (HTTP ${res.status}).`;
+            this.distance_m = this._pathLength(this.path);
+          }
+        } catch (e) {
+          if (seq !== this._snapSeq) return;
+          this.error = 'Sin conexión con el servidor para ajustar a calles.';
+        }
+        this.snapping = false;
+        this.render();
+        this._emit();
+      },
+
+      _renderWastePoints: function() {
+        if (!this.layers) return;
+        this.layers.waste.clearLayers();
+        this.wastePoints.forEach(wp => {
+          const m = L.circleMarker([wp.latitude, wp.longitude], {
+            radius: 6, color: '#64748b', weight: 2, fillColor: '#e2e8f0', fillOpacity: 0.9
+          });
+          m.bindTooltip(`♻️ ${this._esc(wp.name)}<br><span style="font-size:10px;">Modo Paradas: clic para añadirla</span>`, { direction: 'top' });
+          m.on('click', (e) => {
+            L.DomEvent.stopPropagation(e);
+            if (this.mode === 'stops') { this._snapshot(); this._addStop(wp.latitude, wp.longitude, wp); }
+            else { this._onMapClick({ latlng: e.latlng }); }
+          });
+          this.layers.waste.addLayer(m);
+        });
+      },
+
+      render: function() {
+        if (!this.layers) return;
+        const L_ = this.layers;
+        L_.path.clearLayers(); L_.waypoints.clearLayers(); L_.stops.clearLayers();
+
+        if (this.path.length >= 2) {
+          // Halo ancho invisible para facilitar el clic de inserción
+          const hit = L.polyline(this.path, { color: '#000', opacity: 0, weight: 18 });
+          hit.on('click', (e) => {
+            L.DomEvent.stopPropagation(e);
+            if (this.mode !== 'route') { this._onMapClick(e); return; }
+            this._snapshot();
+            this._insertWaypointOnPath(+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6));
+            this._recompute();
+          });
+          hit.bindTooltip('Clic para insertar un punto de control aquí', { sticky: true });
+          L_.path.addLayer(L.polyline(this.path, {
+            color: this.color, weight: 5, opacity: this.snapping ? 0.45 : 0.9,
+            dashArray: this.snapping ? '6, 8' : null, lineJoin: 'round', lineCap: 'round'
+          }));
+          L_.path.addLayer(hit);
+        }
+
+        this.waypoints.forEach((p, i) => {
+          const isEnd = i === 0 || i === this.waypoints.length - 1;
+          const label = i === 0 ? 'A' : (i === this.waypoints.length - 1 ? 'B' : '');
+          const size = isEnd ? 22 : 14;
+          const icon = L.divIcon({
+            className: 'eco-route-wp',
+            html: `<div style="width:${size}px; height:${size}px; border-radius:9999px; background:${isEnd ? this.color : '#ffffff'}; border:3px solid ${this.color}; box-shadow:0 2px 6px rgba(0,0,0,0.35); color:#fff; font-size:10px; font-weight:800; display:flex; align-items:center; justify-content:center; cursor:grab;">${label}</div>`,
+            iconSize: [size, size], iconAnchor: [size / 2, size / 2]
+          });
+          const m = L.marker(p, { icon: icon, draggable: true, autoPan: true, zIndexOffset: 500 });
+          m.bindTooltip(`Punto de control ${i + 1}<br><span style="font-size:10px;">Arrastra para mover · doble clic o clic derecho para borrar</span>`, { direction: 'top' });
+          m.on('dragstart', () => this._snapshot());
+          m.on('dragend', (e) => {
+            const ll = e.target.getLatLng();
+            this.waypoints[i] = [+ll.lat.toFixed(6), +ll.lng.toFixed(6)];
+            this._recompute();
+          });
+          m.on('dblclick contextmenu', (e) => { L.DomEvent.stop(e); this.removeWaypoint(i); });
+          m.on('click', (e) => L.DomEvent.stopPropagation(e));
+          L_.waypoints.addLayer(m);
+        });
+
+        this.stops.forEach((s, i) => {
+          const linked = s.waste_point != null;
+          const icon = L.divIcon({
+            className: 'eco-route-stop',
+            html: `<div style="background:${linked ? '#0f766e' : '#1e293b'}; color:#fff; font-size:11px; font-weight:800; border-radius:9999px 9999px 9999px 2px; transform:rotate(-45deg); width:26px; height:26px; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 3px 8px rgba(0,0,0,0.35);"><span style="transform:rotate(45deg);">${i + 1}</span></div>`,
+            iconSize: [26, 26], iconAnchor: [3, 26]
+          });
+          const m = L.marker([s.latitude, s.longitude], { icon: icon, draggable: true, zIndexOffset: 800 });
+          const eta = s.eta_offset_minutes ? ` · +${s.eta_offset_minutes} min` : '';
+          m.bindTooltip(`<b>${i + 1}. ${this._esc(s.name)}</b>${eta}${linked ? '<br><span style="font-size:10px;">♻️ Enlazada a punto de acopio</span>' : ''}`, { direction: 'top', offset: [10, -22] });
+          m.on('dragstart', () => this._snapshot());
+          m.on('dragend', (e) => {
+            const ll = e.target.getLatLng();
+            const wp = this._nearestWastePoint(ll.lat, ll.lng);
+            Object.assign(this.stops[i], {
+              latitude: wp ? wp.latitude : +ll.lat.toFixed(6),
+              longitude: wp ? wp.longitude : +ll.lng.toFixed(6),
+              waste_point: wp ? Number(wp.id) : null
+            });
+            this.render();
+            this._emit();
+          });
+          m.on('click', (e) => L.DomEvent.stopPropagation(e));
+          L_.stops.addLayer(m);
+        });
+      }
+    };
+
+    // =====================================================================
+    // Modo Recolector: rastreador GPS del conductor con buffer offline
+    // =====================================================================
+    window.ecoTracker = {
+      runId: null,
+      token: null,
+      watchId: null,
+      flushTimer: null,
+      wakeLock: null,
+      sending: false,
+      lastQueuedTs: 0,
+      MIN_FIX_INTERVAL_MS: 3000,
+      FLUSH_INTERVAL_MS: 5000,
+      BATCH_SIZE: 100,
+      MAX_QUEUE: 3000,
+      state: { tracking: false, gps: 'idle', accuracy: null, last_fix_at: null, last_sent_at: null, pending: 0, wake_lock: false, server_status: null, error: null },
+
+      _emit: function() {
+        this.state.pending = this._load().length;
+        if (typeof window.onTrackerStatus === 'function') {
+          try { window.onTrackerStatus(JSON.stringify(this.state)); } catch (e) {}
+        }
+      },
+      _qKey: function() { return 'eco_gps_queue_' + this.runId; },
+      _load: function() {
+        if (!this.runId) return [];
+        try { return JSON.parse(localStorage.getItem(this._qKey()) || '[]') || []; } catch (e) { return []; }
+      },
+      _save: function(q) {
+        try { localStorage.setItem(this._qKey(), JSON.stringify(q.slice(-this.MAX_QUEUE))); } catch (e) {}
+      },
+      _apiBase: function() {
+        return (window.__ECOALERTA_API_BASE__ || window.location.origin).replace(/\/+$/, '');
+      },
+
+      _requestWakeLock: async function() {
+        if (!('wakeLock' in navigator) || !this.state.tracking || document.visibilityState !== 'visible') return;
+        try {
+          this.wakeLock = await navigator.wakeLock.request('screen');
+          this.state.wake_lock = true;
+          this.wakeLock.addEventListener('release', () => { this.state.wake_lock = false; this._emit(); });
+        } catch (e) {
+          this.state.wake_lock = false;
+        }
+        this._emit();
+      },
+
+      _onVisibility: function() {
+        const t = window.ecoTracker;
+        if (document.visibilityState === 'visible' && t.state.tracking) {
+          t._requestWakeLock();
+          t.flush();
+        }
+      },
+      _onOnline: function() { window.ecoTracker.flush(); },
+
+      start: function(runId, token) {
+        runId = String(runId);
+        if (this.state.tracking && this.runId === runId && this.watchId !== null) {
+          this.token = token;
+          this._emit();
+          return;
+        }
+        this.stop(false);
+        this.runId = runId;
+        this.token = token;
+        this.state = { tracking: true, gps: 'searching', accuracy: null, last_fix_at: null, last_sent_at: null, pending: 0, wake_lock: false, server_status: 'active', error: null };
+
+        if (!('geolocation' in navigator)) {
+          this.state.gps = 'unavailable';
+          this.state.error = 'Este dispositivo no tiene GPS disponible en el navegador.';
+          this._emit();
+          return;
+        }
+        if (!window.isSecureContext) {
+          this.state.error = 'El GPS requiere HTTPS. Abre la app desde la dirección segura.';
+        }
+
+        this.watchId = navigator.geolocation.watchPosition(
+          (pos) => this._onFix(pos),
+          (err) => this._onError(err),
+          { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 }
+        );
+        this.flushTimer = setInterval(() => this.flush(), this.FLUSH_INTERVAL_MS);
+        document.addEventListener('visibilitychange', this._onVisibility);
+        window.addEventListener('online', this._onOnline);
+        this._requestWakeLock();
+        this._emit();
+      },
+
+      _onFix: function(pos) {
+        const c = pos.coords;
+        this.state.gps = c.accuracy > 60 ? 'weak' : 'ok';
+        this.state.accuracy = Math.round(c.accuracy);
+        this.state.last_fix_at = Date.now();
+        const ts = pos.timestamp || Date.now();
+        if (ts - this.lastQueuedTs >= this.MIN_FIX_INTERVAL_MS) {
+          this.lastQueuedTs = ts;
+          const q = this._load();
+          q.push({
+            lat: c.latitude,
+            lng: c.longitude,
+            accuracy: c.accuracy,
+            speed: (typeof c.speed === 'number' && !isNaN(c.speed)) ? c.speed : null,
+            heading: (typeof c.heading === 'number' && !isNaN(c.heading)) ? c.heading : null,
+            ts: ts
+          });
+          this._save(q);
+        }
+        this._emit();
+      },
+
+      _onError: function(err) {
+        if (err.code === 1) {
+          this.state.gps = 'denied';
+          this.state.error = 'Permiso de ubicación denegado. Actívalo en los ajustes del navegador.';
+        } else if (err.code === 2) {
+          this.state.gps = 'unavailable';
+          this.state.error = 'No se pudo obtener señal GPS. Verifica que la ubicación esté encendida.';
+        } else {
+          this.state.gps = 'searching';
+        }
+        this._emit();
+      },
+
+      flush: async function() {
+        if (this.sending || !this.runId || !this.token) return;
+        const q = this._load();
+        if (q.length === 0) { this._emit(); return; }
+        const batch = q.slice(0, this.BATCH_SIZE);
+        const runId = this.runId;
+        this.sending = true;
+        try {
+          const res = await fetch(`${this._apiBase()}/api/runs/${encodeURIComponent(runId)}/positions/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Token ${this.token}` },
+            body: JSON.stringify({ points: batch })
+          });
+          if (runId !== this.runId) return;
+          if (res.ok) {
+            const rest = this._load();
+            rest.splice(0, batch.length);
+            this._save(rest);
+            this.state.last_sent_at = Date.now();
+            this.state.error = null;
+            if (rest.length > 0) setTimeout(() => this.flush(), 300);
+          } else if (res.status === 409) {
+            let body = {};
+            try { body = await res.json(); } catch (e) {}
+            this.state.server_status = body.status || 'finished';
+            this.stop(true);
+          } else if (res.status === 401 || res.status === 403) {
+            this.state.error = 'Tu sesión ya no tiene permiso para enviar el GPS de este turno.';
+            this.stop(false);
+          } else if (res.status === 429) {
+            this.state.error = 'Demasiados envíos; se reintentará en unos segundos.';
+          } else {
+            this.state.error = `Servidor respondió ${res.status}; se reintentará.`;
+          }
+        } catch (e) {
+          this.state.error = 'Sin conexión. Las posiciones se guardan y se enviarán al volver la señal.';
+        } finally {
+          this.sending = false;
+          this._emit();
+        }
+      },
+
+      stop: function(clearQueue) {
+        if (this.watchId !== null && navigator.geolocation) {
+          navigator.geolocation.clearWatch(this.watchId);
+        }
+        this.watchId = null;
+        if (this.flushTimer) clearInterval(this.flushTimer);
+        this.flushTimer = null;
+        document.removeEventListener('visibilitychange', this._onVisibility);
+        window.removeEventListener('online', this._onOnline);
+        if (this.wakeLock) {
+          try { this.wakeLock.release(); } catch (e) {}
+        }
+        this.wakeLock = null;
+        if (clearQueue && this.runId) {
+          try { localStorage.removeItem(this._qKey()); } catch (e) {}
+        }
+        this.state.tracking = false;
+        this.state.wake_lock = false;
+        this.state.gps = 'idle';
+        this._emit();
       }
     };
 

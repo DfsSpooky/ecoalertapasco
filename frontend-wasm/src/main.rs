@@ -13,6 +13,7 @@ use wasm_bindgen::JsCast;
 use api::{sync_js_api_base, sync_url, ws_map_url};
 use components::{
     alert_detail::AlertDetail,
+    collector_panel::CollectorPanel,
     auth_dialog::AuthDialog,
     authority_dashboard::AuthorityDashboard,
     emergency_banner::EmergencyBanner,
@@ -27,7 +28,7 @@ use components::{
     waste_list_modal::WasteListModal,
 };
 use models::{
-    EcoAlert, EcoCategory, EcoDistrict, EcoSeverity, SyncResponse, SyncStatus, WastePoint,
+    CollectionRoute, EcoAlert, TruckRun, EcoCategory, EcoDistrict, EcoSeverity, SyncResponse, SyncStatus, WastePoint,
     WsServerMessage,
 };
 use storage::{clear_auth_session, load_auth_session};
@@ -75,6 +76,9 @@ fn App() -> impl IntoView {
 
     // Solid waste & truck routes layer state
     let waste_points = create_rw_signal(Vec::<WastePoint>::new());
+    let collection_routes = create_rw_signal(Vec::<CollectionRoute>::new());
+    let truck_runs = create_rw_signal(Vec::<TruckRun>::new());
+    let show_collector_panel = create_rw_signal(false);
     let show_waste_layer = create_rw_signal(false);
     let selected_waste_point_id = create_rw_signal(None::<String>);
     let show_waste_list_modal = create_rw_signal(false);
@@ -145,14 +149,19 @@ fn App() -> impl IntoView {
                     if resp.ok() {
                         if let Ok(profile_data) = resp.json::<serde_json::Value>().await {
                             let backend_is_staff = profile_data.get("is_staff").and_then(|v| v.as_bool()).unwrap_or(false);
-                            current_user.update(|u_opt| {
-                                if let Some(ref mut u) = u_opt {
-                                    if u.is_staff != backend_is_staff {
+                            let backend_is_collector = profile_data.get("is_collector").and_then(|v| v.as_bool()).unwrap_or(false);
+                            let needs_update = current_user.with_untracked(|u_opt| {
+                                u_opt.as_ref().map(|u| u.is_staff != backend_is_staff || u.is_collector != backend_is_collector).unwrap_or(false)
+                            });
+                            if needs_update {
+                                current_user.update(|u_opt| {
+                                    if let Some(ref mut u) = u_opt {
                                         u.is_staff = backend_is_staff;
+                                        u.is_collector = backend_is_collector;
                                         crate::storage::save_auth_session(u);
                                     }
-                                }
-                            });
+                                });
+                            }
                         }
                     } else if resp.status() == 401 {
                         crate::storage::clear_auth_session();
@@ -192,6 +201,12 @@ fn App() -> impl IntoView {
                         }
                         if waste_points.with_untracked(|cur| cur != &sync_data.waste_points) {
                             waste_points.set(sync_data.waste_points);
+                        }
+                        if collection_routes.with_untracked(|cur| cur != &sync_data.routes) {
+                            collection_routes.set(sync_data.routes);
+                        }
+                        if truck_runs.with_untracked(|cur| cur != &sync_data.truck_runs) {
+                            truck_runs.set(sync_data.truck_runs);
                         }
                         last_etag.set(Some(sync_data.etag));
                         has_completed_initial_sync.set(true);
@@ -277,8 +292,16 @@ fn App() -> impl IntoView {
                     WsServerMessage::InitialSnapshot {
                         alerts: snap_alerts,
                         waste_points: snap_wp,
+                        routes: snap_routes,
+                        truck_runs: snap_runs,
                         ..
                     } => {
+                        if truck_runs.with_untracked(|cur| cur != &snap_runs) {
+                            truck_runs.set(snap_runs);
+                        }
+                        if collection_routes.with_untracked(|cur| cur != &snap_routes) {
+                            collection_routes.set(snap_routes);
+                        }
                         if alerts.with_untracked(|cur| cur != &snap_alerts) {
                             alerts.set(snap_alerts);
                         }
@@ -364,6 +387,62 @@ fn App() -> impl IntoView {
                             selected_waste_point_id.set(None);
                         }
                         waste_points.update(|list| list.retain(|p| p.id_string() != id));
+                    }
+                    WsServerMessage::RouteUpserted { route } => {
+                        let rid = route.id_string();
+                        let changed = collection_routes.with_untracked(|list| {
+                            list.iter().find(|r| r.id_string() == rid).map(|cur| cur != &route).unwrap_or(true)
+                        });
+                        if changed {
+                            collection_routes.update(|list| {
+                                if let Some(existing) = list.iter_mut().find(|r| r.id_string() == rid) {
+                                    *existing = route;
+                                } else {
+                                    list.push(route);
+                                }
+                            });
+                        }
+                    }
+                    WsServerMessage::RouteDeleted { id } => {
+                        if collection_routes.with_untracked(|list| list.iter().any(|r| r.id_string() == id)) {
+                            collection_routes.update(|list| list.retain(|r| r.id_string() != id));
+                        }
+                    }
+                    WsServerMessage::TruckRunUpserted { run } => {
+                        truck_runs.update(|list| {
+                            if let Some(existing) = list.iter_mut().find(|r| r.id == run.id) {
+                                // Conservar la última posición si el evento de estado llega sin ella
+                                let mut merged = run;
+                                if merged.last_latitude.is_none() {
+                                    merged.last_latitude = existing.last_latitude;
+                                    merged.last_longitude = existing.last_longitude;
+                                    merged.last_heading = existing.last_heading;
+                                    merged.last_position_at = existing.last_position_at.clone();
+                                }
+                                *existing = merged;
+                            } else {
+                                list.push(run);
+                            }
+                        });
+                    }
+                    WsServerMessage::TruckRunEnded { id } => {
+                        if truck_runs.with_untracked(|list| list.iter().any(|r| r.id.to_string() == id)) {
+                            truck_runs.update(|list| list.retain(|r| r.id.to_string() != id));
+                        }
+                    }
+                    WsServerMessage::TruckPosition { position } => {
+                        let known = truck_runs.with_untracked(|list| list.iter().any(|r| r.id == position.run_id));
+                        if known {
+                            truck_runs.update(|list| {
+                                if let Some(r) = list.iter_mut().find(|r| r.id == position.run_id) {
+                                    r.last_latitude = Some(position.latitude);
+                                    r.last_longitude = Some(position.longitude);
+                                    r.last_heading = position.heading;
+                                    r.last_speed_kmh = position.speed_kmh;
+                                    r.last_position_at = position.at.clone();
+                                }
+                            });
+                        }
                     }
                     WsServerMessage::AuthInvalid => {
                         clear_auth_session();
@@ -663,6 +742,9 @@ fn App() -> impl IntoView {
                 report_center=report_center
                 show_new_report_dialog=show_new_report_dialog
                 waste_points=waste_points
+                collection_routes=collection_routes
+                truck_runs=truck_runs
+                show_collector_panel=show_collector_panel
                 show_waste_layer=show_waste_layer
                 selected_waste_point_id=selected_waste_point_id
                 show_waste_list_modal=show_waste_list_modal
@@ -671,6 +753,12 @@ fn App() -> impl IntoView {
                 current_user=current_user
                 show_help_guide=show_help_guide
                 is_sidebar_collapsed=is_sidebar_collapsed
+            />
+
+            // Modo Recolector (solo conductores del grupo `recolectores`)
+            <CollectorPanel
+                current_user=current_user
+                show_panel=show_collector_panel
             />
 
             // Alert Detail floating card
@@ -718,6 +806,7 @@ fn App() -> impl IntoView {
                 selected_alert_id=selected_alert_id
                 selected_waste_point_id=selected_waste_point_id
                 show_waste_layer=show_waste_layer
+                truck_runs=truck_runs
             />
 
             // Report Incident Dialog

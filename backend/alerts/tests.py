@@ -334,3 +334,371 @@ class EcoAlertaTests(TestCase):
 
 
 
+
+
+class CollectionRouteFleetTests(TestCase):
+    """Fase 1 del seguimiento de camiones: rutas, flota y permisos."""
+
+    def setUp(self):
+        from django.contrib.auth.models import Group
+        from alerts.models import COLLECTOR_GROUP_NAME, Truck
+
+        self.client = APIClient()
+        self.citizen = User.objects.create_user(username='vecino', password='password123')
+        self.staff_user = User.objects.create_user(username='muni', password='password123', is_staff=True)
+        self.driver = User.objects.create_user(username='chofer', password='password123')
+        self.driver.groups.add(Group.objects.get(name=COLLECTOR_GROUP_NAME))
+        self.truck = Truck.objects.create(code='R-01', plate='ABC-123', driver=self.driver)
+        self.route_payload = {
+            'name': 'Ruta Prueba',
+            'district': 'yanacancha',
+            'waste_type': 'general',
+            'color': '#FF0000',
+            'schedule': 'Lunes 06:00',
+            'path': [[-10.6625, -76.2555], [-10.6640, -76.2530]],
+            'stops': [
+                {'name': 'Inicio', 'latitude': -10.6625, 'longitude': -76.2555, 'eta_offset_minutes': 0},
+                {'name': 'Fin', 'latitude': -10.6640, 'longitude': -76.2530, 'eta_offset_minutes': 10},
+            ],
+        }
+
+    def test_collector_group_created_by_migration(self):
+        from django.contrib.auth.models import Group
+        self.assertTrue(Group.objects.filter(name='recolectores').exists())
+
+    def test_citizen_cannot_create_route(self):
+        self.client.force_authenticate(user=self.citizen)
+        res = self.client.post('/api/routes/', self.route_payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_staff_creates_route_with_stops(self):
+        from alerts.models import CollectionRoute
+        self.client.force_authenticate(user=self.staff_user)
+        res = self.client.post('/api/routes/', self.route_payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+        route = CollectionRoute.objects.get()
+        self.assertEqual(route.color, '#ff0000')
+        self.assertEqual(list(route.stops.values_list('order', 'name')), [(0, 'Inicio'), (1, 'Fin')])
+
+    def test_route_update_replaces_stops_and_patch_keeps_them(self):
+        self.client.force_authenticate(user=self.staff_user)
+        rid = self.client.post('/api/routes/', self.route_payload, format='json').data['id']
+        res = self.client.patch(f'/api/routes/{rid}/', {'schedule': 'Martes'}, format='json')
+        self.assertEqual(len(res.data['stops']), 2)
+        payload = dict(self.route_payload, stops=[{'name': 'Única', 'latitude': -10.66, 'longitude': -76.25}])
+        res = self.client.put(f'/api/routes/{rid}/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        self.assertEqual([s['name'] for s in res.data['stops']], ['Única'])
+
+    def test_route_path_validation(self):
+        self.client.force_authenticate(user=self.staff_user)
+        for bad_path in ([[-10.66, -76.25]], [[-10.66, 'x'], [1, 2]], [[100, 0], [0, 0]], 'nope'):
+            res = self.client.post('/api/routes/', dict(self.route_payload, path=bad_path), format='json')
+            self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST, bad_path)
+        res = self.client.post('/api/routes/', dict(self.route_payload, color='green'), format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_public_sees_only_published_routes(self):
+        from alerts.models import CollectionRoute
+        CollectionRoute.objects.create(name='Publicada', path=[[0, 0], [1, 1]])
+        CollectionRoute.objects.create(name='Borrador', path=[[0, 0], [1, 1]], is_active=False)
+        res = self.client.get('/api/routes/')
+        self.assertEqual([r['name'] for r in res.data], ['Publicada'])
+        self.client.force_authenticate(user=self.staff_user)
+        self.assertEqual(len(self.client.get('/api/routes/').data), 2)
+
+    def test_sync_includes_routes_and_etag_changes(self):
+        from alerts.models import CollectionRoute
+        first = self.client.get('/api/sync/')
+        self.assertEqual(first.data['routes'], [])
+        CollectionRoute.objects.create(name='Nueva', path=[[0, 0], [1, 1]])
+        second = self.client.get('/api/sync/', {'etag': first.data['etag']})
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(second.data['routes']), 1)
+
+    def test_truck_privacy_for_citizens(self):
+        res = self.client.get('/api/trucks/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(set(res.data[0].keys()), {'id', 'code', 'waste_type', 'is_active'})
+        self.client.force_authenticate(user=self.staff_user)
+        res = self.client.get('/api/trucks/')
+        self.assertEqual(res.data[0]['plate'], 'ABC-123')
+        self.assertEqual(res.data[0]['driver_username'], 'chofer')
+
+    def test_driver_sees_only_assigned_trucks_and_cannot_edit(self):
+        from alerts.models import Truck
+        Truck.objects.create(code='R-02', plate='XYZ-999')
+        self.client.force_authenticate(user=self.driver)
+        res = self.client.get('/api/trucks/')
+        self.assertEqual([t['code'] for t in res.data], ['R-01'])
+        res = self.client.patch(f'/api/trucks/{self.truck.id}/', {'plate': 'HACK'}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_runs_visibility(self):
+        from alerts.models import CollectionRoute, RouteRun
+        route = CollectionRoute.objects.create(name='R', path=[[0, 0], [1, 1]])
+        RouteRun.objects.create(route=route, truck=self.truck, driver=self.driver)
+        self.assertEqual(self.client.get('/api/runs/').status_code, status.HTTP_401_UNAUTHORIZED)
+        self.client.force_authenticate(user=self.citizen)
+        self.assertEqual(self.client.get('/api/runs/').data, [])
+        self.client.force_authenticate(user=self.driver)
+        self.assertEqual(len(self.client.get('/api/runs/').data), 1)
+
+    def test_one_open_run_per_truck(self):
+        from django.db import IntegrityError, transaction
+        from alerts.models import CollectionRoute, RouteRun
+        route = CollectionRoute.objects.create(name='R', path=[[0, 0], [1, 1]])
+        RouteRun.objects.create(route=route, truck=self.truck)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            RouteRun.objects.create(route=route, truck=self.truck)
+
+    def test_seed_command_creates_initial_route_once(self):
+        from django.core.management import call_command
+        from alerts.models import CollectionRoute
+        call_command('seed_collection_routes', '--if-empty', verbosity=0)
+        call_command('seed_collection_routes', '--if-empty', verbosity=0)
+        self.assertEqual(CollectionRoute.objects.count(), 1)
+        self.assertEqual(CollectionRoute.objects.get().stops.count(), 5)
+
+
+class RouteBroadcastTests(TestCase):
+    """Las rutas se difunden por WebSocket al publicarse, editarse o retirarse."""
+
+    def _capture(self):
+        from unittest import mock
+        return mock.patch('alerts.signals._send_group_event')
+
+    def test_broadcast_on_save_and_unpublish(self):
+        from alerts.models import CollectionRoute
+        with self._capture() as sent, self.captureOnCommitCallbacks(execute=True):
+            route = CollectionRoute.objects.create(name='Viva', path=[[0, 0], [1, 1]])
+        self.assertEqual(sent.call_args[0][0]['type'], 'map.route.upserted')
+
+        with self._capture() as sent, self.captureOnCommitCallbacks(execute=True):
+            route.is_active = False
+            route.save()
+        self.assertEqual(sent.call_args[0][0], {'type': 'map.route.deleted', 'id': str(route.pk)})
+
+
+class DriverTrackingTests(TestCase):
+    """Fase 2: Modo Recolector, ciclo de vida del turno e ingesta de GPS."""
+
+    def setUp(self):
+        import time
+        from django.contrib.auth.models import Group
+        from alerts.models import COLLECTOR_GROUP_NAME, CollectionRoute, Truck
+
+        self.client = APIClient()
+        group = Group.objects.get(name=COLLECTOR_GROUP_NAME)
+        self.driver = User.objects.create_user(username='chofer1', password='x')
+        self.driver.groups.add(group)
+        self.other_driver = User.objects.create_user(username='chofer2', password='x')
+        self.other_driver.groups.add(group)
+        self.citizen = User.objects.create_user(username='vecina', password='x')
+        self.staff_user = User.objects.create_user(username='jefe', password='x', is_staff=True)
+        self.truck = Truck.objects.create(code='R-01', plate='AAA-111', driver=self.driver)
+        self.route = CollectionRoute.objects.create(name='Centro', path=[[-10.66, -76.25], [-10.67, -76.26]])
+        self.now_ms = int(time.time() * 1000)
+
+    def _start(self, user=None):
+        self.client.force_authenticate(user=user or self.driver)
+        return self.client.post('/api/runs/start/', {'truck': self.truck.id, 'route': self.route.id}, format='json')
+
+    def _point(self, offset_s, lat=-10.6600, lng=-76.2500, accuracy=10):
+        return {'lat': lat, 'lng': lng, 'accuracy': accuracy, 'speed': 5, 'heading': 90, 'ts': self.now_ms + offset_s * 1000}
+
+    def test_login_reports_collector_role(self):
+        res = self.client.post('/api/auth/login/', {'username': 'chofer1', 'password': 'x'}, format='json')
+        self.assertTrue(res.data['is_collector'])
+        res = self.client.post('/api/auth/login/', {'username': 'vecina', 'password': 'x'}, format='json')
+        self.assertFalse(res.data['is_collector'])
+
+    def test_driver_context(self):
+        self.client.force_authenticate(user=self.driver)
+        res = self.client.get('/api/runs/driver-context/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual([t['code'] for t in res.data['trucks']], ['R-01'])
+        self.assertEqual(len(res.data['routes']), 1)
+        self.assertIsNone(res.data['open_run'])
+        self.client.force_authenticate(user=self.citizen)
+        self.assertEqual(self.client.get('/api/runs/driver-context/').status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_start_requires_assigned_truck(self):
+        self.assertEqual(self._start(self.citizen).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self._start(self.other_driver).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self._start().status_code, status.HTTP_201_CREATED)
+
+    def test_start_is_idempotent_and_blocks_double_runs(self):
+        first = self._start()
+        again = self._start()
+        self.assertEqual(again.status_code, status.HTTP_200_OK)
+        self.assertEqual(again.data['id'], first.data['id'])
+        # Otro conductor (vía autoridad) no puede abrir un segundo turno con el mismo camión
+        self.assertEqual(self._start(self.staff_user).status_code, status.HTTP_409_CONFLICT)
+
+    def test_lifecycle_transitions(self):
+        run_id = self._start().data['id']
+        self.assertEqual(self.client.post(f'/api/runs/{run_id}/resume/').status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(self.client.post(f'/api/runs/{run_id}/pause/').data['status'], 'paused')
+        self.assertEqual(self.client.post(f'/api/runs/{run_id}/resume/').data['status'], 'active')
+        res = self.client.post(f'/api/runs/{run_id}/finish/')
+        self.assertEqual(res.data['status'], 'finished')
+        self.assertIsNotNone(res.data['ended_at'])
+        # Tras finalizar, el camión queda libre para un nuevo turno
+        self.assertEqual(self._start().status_code, status.HTTP_201_CREATED)
+
+    def test_other_driver_cannot_touch_run(self):
+        run_id = self._start().data['id']
+        self.client.force_authenticate(user=self.other_driver)
+        self.assertEqual(self.client.post(f'/api/runs/{run_id}/finish/').status_code, status.HTTP_403_FORBIDDEN)
+        res = self.client.post(f'/api/runs/{run_id}/positions/', {'points': [self._point(0)]}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_staff_can_finish_any_run(self):
+        run_id = self._start().data['id']
+        self.client.force_authenticate(user=self.staff_user)
+        self.assertEqual(self.client.post(f'/api/runs/{run_id}/finish/').status_code, status.HTTP_200_OK)
+
+    def test_positions_filtering_and_storage(self):
+        from alerts.models import RouteRun
+        run_id = self._start().data['id']
+        points = [
+            self._point(0),
+            self._point(1, lat=-10.66001),               # < 2 s desde la anterior → descartada
+            self._point(5, lat=-10.6601),                # ok (~11 m en 5 s)
+            self._point(10, lat=-10.6602, accuracy=500),  # precisión mala → descartada
+            self._point(15, lat=-10.70),                 # salto de ~4 km en 10 s → descartado
+            self._point(40, lat=-10.6610),               # ok, > 15 s → se guarda en historial
+            {'lat': 'x', 'lng': 1, 'ts': self.now_ms},    # inválido
+        ]
+        res = self.client.post(f'/api/runs/{run_id}/positions/', {'points': points}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        self.assertEqual(res.data['accepted'], 3)
+        self.assertEqual(res.data['rejected'], 4)
+        run = RouteRun.objects.get(pk=run_id)
+        self.assertAlmostEqual(run.last_latitude, -10.6610)
+        self.assertEqual(run.last_speed_kmh, 18.0)
+        # Se guarda el primero y el de +40 s; el de +5 s está a < 15 s y < 40 m del anterior
+        self.assertEqual(run.positions.count(), 2)
+
+    def test_positions_rejected_when_paused(self):
+        run_id = self._start().data['id']
+        self.client.post(f'/api/runs/{run_id}/pause/')
+        res = self.client.post(f'/api/runs/{run_id}/positions/', {'points': [self._point(0)]}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(res.data['status'], 'paused')
+
+    def test_position_is_broadcast_and_public_payload_hides_driver(self):
+        from unittest import mock
+        run_id = self._start().data['id']
+        with mock.patch('alerts.tracking._send') as sent, self.captureOnCommitCallbacks(execute=True):
+            self.client.post(f'/api/runs/{run_id}/positions/', {'points': [self._point(0), self._point(6, lat=-10.6601)]}, format='json')
+        self.assertEqual(sent.call_count, 1)  # solo la última posición del lote
+        payload = sent.call_args[0][0]
+        self.assertEqual(payload['type'], 'map.truck.position')
+        self.assertAlmostEqual(payload['position']['latitude'], -10.6601)
+
+        self.client.force_authenticate(user=None)
+        runs = self.client.get('/api/sync/').data['truck_runs']
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]['truck_code'], 'R-01')
+        self.assertNotIn('driver', runs[0])
+        self.assertNotIn('plate', runs[0])
+
+    def test_finished_run_broadcasts_end_and_leaves_snapshot(self):
+        from unittest import mock
+        run_id = self._start().data['id']
+        with mock.patch('alerts.tracking._send') as sent, self.captureOnCommitCallbacks(execute=True):
+            self.client.post(f'/api/runs/{run_id}/finish/')
+        self.assertEqual(sent.call_args[0][0], {'type': 'map.truck.run.ended', 'id': str(run_id)})
+        self.assertEqual(self.client.get('/api/sync/').data['truck_runs'], [])
+
+
+class RouteEditorBackendTests(TestCase):
+    """Fase 3: puntos de control, ajuste a calles (OSRM) y borrado seguro."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.client = APIClient()
+        self.staff_user = User.objects.create_user(username='editor', password='x', is_staff=True)
+        self.citizen = User.objects.create_user(username='vecino2', password='x')
+        self.waypoints = [[-10.6625, -76.2555], [-10.6640, -76.2530]]
+
+    def _osrm_response(self, status_code=200, payload=None):
+        from unittest import mock
+        res = mock.Mock()
+        res.status_code = status_code
+        res.json.return_value = payload if payload is not None else {
+            'code': 'Ok',
+            'routes': [{
+                'distance': 412.3,
+                'duration': 61.0,
+                'geometry': {'coordinates': [[-76.2555, -10.6625], [-76.2550, -10.6630], [-76.2530, -10.6640]]},
+            }],
+        }
+        return res
+
+    def test_snap_requires_staff(self):
+        self.client.force_authenticate(user=self.citizen)
+        res = self.client.post('/api/routes/snap/', {'waypoints': self.waypoints}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_snap_returns_lat_lng_path_and_caches(self):
+        from unittest import mock
+        self.client.force_authenticate(user=self.staff_user)
+        with mock.patch('alerts.road_snapping.httpx.get', return_value=self._osrm_response()) as get:
+            res = self.client.post('/api/routes/snap/', {'waypoints': self.waypoints}, format='json')
+            self.client.post('/api/routes/snap/', {'waypoints': self.waypoints}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        self.assertEqual(res.data['path'][0], [-10.6625, -76.2555])  # convertido de [lng, lat]
+        self.assertEqual(res.data['distance_m'], 412.3)
+        self.assertEqual(get.call_count, 1)
+        self.assertIn('-76.255500,-10.662500;-76.253000,-10.664000', get.call_args[0][0])
+
+    def test_snap_errors_are_readable(self):
+        from unittest import mock
+        import httpx
+        self.client.force_authenticate(user=self.staff_user)
+        with mock.patch('alerts.road_snapping.httpx.get', return_value=self._osrm_response(400, {'code': 'NoRoute'})):
+            res = self.client.post('/api/routes/snap/', {'waypoints': self.waypoints}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertIn('calle', res.data['error'])
+        with mock.patch('alerts.road_snapping.httpx.get', side_effect=httpx.ConnectError('down')):
+            res = self.client.post('/api/routes/snap/', {'waypoints': [[-10.66, -76.25], [-10.67, -76.26]]}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_502_BAD_GATEWAY)
+        res = self.client.post('/api/routes/snap/', {'waypoints': [[-10.66, -76.25]]}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_simplify_keeps_shape_within_budget(self):
+        from alerts.road_snapping import _fit_vertex_budget, MAX_OUTPUT_VERTICES
+        import math
+        pts = [[-10.66 + 0.01 * math.sin(i / 50), -76.25 + i * 0.00001] for i in range(6000)]
+        out = _fit_vertex_budget(pts)
+        self.assertLessEqual(len(out), MAX_OUTPUT_VERTICES)
+        self.assertEqual(out[0], pts[0])
+        self.assertEqual(out[-1], pts[-1])
+
+    def test_route_stores_waypoints(self):
+        self.client.force_authenticate(user=self.staff_user)
+        res = self.client.post('/api/routes/', {
+            'name': 'Con editor', 'color': '#123456', 'snap_to_roads': True,
+            'path': [[-10.6625, -76.2555], [-10.6630, -76.2550], [-10.6640, -76.2530]],
+            'waypoints': self.waypoints,
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+        self.assertEqual(res.data['waypoints'], self.waypoints)
+        self.assertTrue(res.data['snap_to_roads'])
+        bad = self.client.post('/api/routes/', {'name': 'x', 'path': self.waypoints, 'waypoints': [[1, 'a']]}, format='json')
+        self.assertEqual(bad.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_delete_route_with_history_is_blocked(self):
+        from alerts.models import CollectionRoute, RouteRun, Truck
+        route = CollectionRoute.objects.create(name='Con historial', path=self.waypoints)
+        truck = Truck.objects.create(code='R-09', plate='HIS-009')
+        RouteRun.objects.create(route=route, truck=truck, status='finished')
+        self.client.force_authenticate(user=self.staff_user)
+        res = self.client.delete(f'/api/routes/{route.id}/')
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        empty = CollectionRoute.objects.create(name='Sin historial', path=self.waypoints)
+        self.assertEqual(self.client.delete(f'/api/routes/{empty.id}/').status_code, status.HTTP_204_NO_CONTENT)

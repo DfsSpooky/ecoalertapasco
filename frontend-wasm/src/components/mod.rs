@@ -1,12 +1,15 @@
 pub mod alert_detail;
 pub mod alerts_carousel;
+pub mod collector_panel;
 pub mod auth_dialog;
 pub mod authority_dashboard;
 pub mod emergency_banner;
+pub mod fleet_routes_tab;
 pub mod help_guide_modal;
 pub mod inspection_report_modal;
 pub mod map;
 pub mod report_dialog;
+pub mod route_editor;
 pub mod sidebar;
 pub mod transparency_portal;
 pub mod user_profile_modal;

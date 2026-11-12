@@ -31,4 +31,4 @@ EXPOSE 8000
 # - Ejecuta migraciones sin borrar datos reales
 # - Inicializa los puntos municipales de acopio únicamente si la tabla está vacía (--if-empty)
 # - Levanta Uvicorn soportando cabeceras de Reverse Proxy HTTPS/WSS (--proxy-headers)
-CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && python manage.py seed_waste_points --if-empty && python manage.py ensure_admin && uvicorn ecoalerta_backend.asgi:application --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*' --ws-ping-interval 25 --ws-ping-timeout 30"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && python manage.py seed_waste_points --if-empty && python manage.py seed_collection_routes --if-empty && python manage.py ensure_admin && uvicorn ecoalerta_backend.asgi:application --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*' --ws-ping-interval 25 --ws-ping-timeout 30"]

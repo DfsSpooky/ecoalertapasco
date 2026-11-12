@@ -2,7 +2,7 @@ use leptos::*;
 use wasm_bindgen::prelude::*;
 use crate::components::alerts_carousel::AlertsCarousel;
 use crate::geo::get_browser_gps_position;
-use crate::models::{AuthUser, EcoAlert, TRUCK_ROUTE_POINTS, WastePoint};
+use crate::models::{AuthUser, CollectionRoute, EcoAlert, TruckRun, WastePoint};
 
 #[component]
 pub fn MapView(
@@ -12,6 +12,9 @@ pub fn MapView(
     report_center: RwSignal<(f64, f64)>,
     show_new_report_dialog: RwSignal<bool>,
     waste_points: RwSignal<Vec<WastePoint>>,
+    collection_routes: RwSignal<Vec<CollectionRoute>>,
+    truck_runs: RwSignal<Vec<TruckRun>>,
+    show_collector_panel: RwSignal<bool>,
     show_waste_layer: RwSignal<bool>,
     selected_waste_point_id: RwSignal<Option<String>>,
     show_waste_list_modal: RwSignal<bool>,
@@ -75,8 +78,39 @@ pub fn MapView(
             let script = format!("window.ecoMap.renderWastePoints({}, {});", json_str, visible);
             let _ = js_sys::eval(&script);
         }
-        if let Ok(route_json) = serde_json::to_string(&TRUCK_ROUTE_POINTS) {
-            let script = format!("window.ecoMap.renderTruckRoute({}, {});", route_json, visible);
+    });
+
+    // Camiones recolectores en recorrido (posición GPS en vivo vía WebSocket)
+    create_effect(move |_| {
+        let runs = truck_runs.get();
+        if let Ok(json_str) = serde_json::to_string(&runs) {
+            let _ = js_sys::eval(&format!("window.ecoMap.renderTrucks({});", json_str));
+        }
+    });
+
+    // Refrescar cada 15 s el estado "hace N s / sin señal" de los camiones aunque no lleguen posiciones
+    {
+        let tick = Closure::<dyn FnMut()>::new(move || {
+            let runs = truck_runs.get_untracked();
+            if runs.is_empty() {
+                return;
+            }
+            if let Ok(json_str) = serde_json::to_string(&runs) {
+                let _ = js_sys::eval(&format!("window.ecoMap.renderTrucks({});", json_str));
+            }
+        });
+        if let Some(win) = web_sys::window() {
+            let _ = win.set_interval_with_callback_and_timeout_and_arguments_0(tick.as_ref().unchecked_ref(), 15_000);
+        }
+        tick.forget();
+    }
+
+    // Rutas de recolección publicadas por la autoridad (en vivo vía WebSocket)
+    create_effect(move |_| {
+        let routes = collection_routes.get();
+        let visible = show_waste_layer.get();
+        if let Ok(json_str) = serde_json::to_string(&routes) {
+            let script = format!("window.ecoMap.renderCollectionRoutes({}, {});", json_str, visible);
             let _ = js_sys::eval(&script);
         }
     });
@@ -239,6 +273,21 @@ pub fn MapView(
                     <span>"🏆"</span>
                     <span>"Transparencia"</span>
                 </button>
+
+                // Modo Recolector (solo conductores de camión)
+                {move || {
+                    let is_collector = current_user.get().map(|u| u.is_collector).unwrap_or(false);
+                    is_collector.then(|| view! {
+                        <button
+                            class="shrink-0 whitespace-nowrap bg-emerald-700 hover:bg-emerald-800 text-white shadow-[0_2px_8px_rgba(4,120,87,0.35)] border border-emerald-600 px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer"
+                            title="Iniciar o gestionar tu recorrido de recolección con GPS"
+                            on:click=move |_| show_collector_panel.set(true)
+                        >
+                            <span>"🚛"</span>
+                            <span>"Modo Recolector"</span>
+                        </button>
+                    })
+                }}
 
                 // Authority Dashboard Quick Button (Restricted exclusively to authorized staff)
                 {move || {

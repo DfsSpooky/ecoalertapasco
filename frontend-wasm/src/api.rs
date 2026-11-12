@@ -178,3 +178,32 @@ pub fn verify_alert_url(id: &str) -> String {
 pub fn health_url() -> String {
     format!("{}/api/health/", api_base_url())
 }
+
+pub fn driver_context_url() -> String {
+    format!("{}/api/runs/driver-context/", api_base_url())
+}
+
+pub fn run_start_url() -> String {
+    format!("{}/api/runs/start/", api_base_url())
+}
+
+/// `action` ∈ {"pause", "resume", "finish"}
+pub fn run_action_url(run_id: i64, action: &str) -> String {
+    format!("{}/api/runs/{}/{}/", api_base_url(), run_id, action)
+}
+
+pub fn routes_url() -> String {
+    format!("{}/api/routes/", api_base_url())
+}
+
+pub fn route_detail_url(id: &str) -> String {
+    format!("{}/api/routes/{}/", api_base_url(), id)
+}
+
+pub fn trucks_url() -> String {
+    format!("{}/api/trucks/", api_base_url())
+}
+
+pub fn admin_url(path: &str) -> String {
+    format!("{}/admin/{}", api_base_url(), path.trim_start_matches('/'))
+}
