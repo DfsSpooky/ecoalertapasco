@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use leptos::*;
-use crate::models::{AlertDomain, AuthUser, EcoAlert, EcoCategory, EcoDistrict, EcoSeverity, SyncStatus};
+use crate::models::{AlertDomain, AuthUser, AuthorityNotification, EcoAlert, EcoCategory, EcoDistrict, EcoSeverity, SyncStatus};
 
 #[component]
 pub fn Sidebar(
@@ -25,6 +25,7 @@ pub fn Sidebar(
     on_manual_sync: Callback<()>,
     show_user_profile: RwSignal<bool>,
     is_collapsed: RwSignal<bool>,
+    authority_notifications: RwSignal<Vec<AuthorityNotification>>,
 ) -> impl IntoView {
     let show_charts = create_rw_signal(true);
 
@@ -479,20 +480,28 @@ pub fn Sidebar(
 
                 // Authority Dashboard Chip (Restricted exclusively to authorized staff)
                 {move || {
-                    let is_authority = current_user.get().map(|u| u.is_authority()).unwrap_or(false);
+                    let user_opt = current_user.get();
+                    let is_authority = user_opt.as_ref().map(|u| u.is_authority()).unwrap_or(false);
+                    let is_only_sereno = user_opt.as_ref().map(|u| u.is_serenazgo && !u.is_staff && !u.is_superuser).unwrap_or(false);
+                    let unread_count = authority_notifications.with(|list| list.iter().filter(|n| !n.read).count());
                     is_authority.then(|| view! {
                         <button
                             class=move || {
                                 if show_authority_dashboard.get() {
-                                    "bg-slate-900 text-white rounded-xl font-semibold px-3 py-1.5 text-xs shadow-xs flex items-center space-x-1.5 shrink-0 transition cursor-pointer"
+                                    "relative bg-slate-900 text-white rounded-xl font-semibold px-3 py-1.5 text-xs shadow-xs flex items-center space-x-1.5 shrink-0 transition cursor-pointer"
                                 } else {
-                                    "bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200/80 font-semibold px-3 py-1.5 text-xs flex items-center space-x-1.5 shrink-0 transition cursor-pointer"
+                                    "relative bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200/80 font-semibold px-3 py-1.5 text-xs flex items-center space-x-1.5 shrink-0 transition cursor-pointer"
                                 }
                             }
                             on:click=move |_| show_authority_dashboard.update(|v| *v = !*v)
                         >
-                            <span>"🏛️"</span>
-                            <span>"Fiscalización"</span>
+                            <span>{if is_only_sereno { "🛡️" } else { "🏛️" }}</span>
+                            <span>{if is_only_sereno { "Serenazgo" } else { "Fiscalización" }}</span>
+                            {(unread_count > 0).then(|| view! {
+                                <span class="ml-0.5 px-1.5 py-0.2 rounded-full text-[9px] font-black bg-red-600 text-white animate-pulse">
+                                    {unread_count}
+                                </span>
+                            })}
                         </button>
                     })
                 }}

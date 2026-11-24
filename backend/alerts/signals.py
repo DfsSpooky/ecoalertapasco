@@ -66,9 +66,13 @@ def broadcast_waste_point_by_id(wp_id: int) -> None:
 
 
 @receiver(post_save, sender=Alert)
-def on_alert_saved(sender, instance: Alert, **kwargs):
+def on_alert_saved(sender, instance: Alert, created: bool = False, **kwargs):
     if instance.pk:
         _schedule_alert_broadcast(instance.pk)
+        if created:
+            from .notifications import schedule_new_alert_notifications
+            alert_id = instance.pk
+            transaction.on_commit(lambda: schedule_new_alert_notifications(alert_id))
 
 
 @receiver(post_delete, sender=Alert)

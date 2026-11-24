@@ -1,5 +1,5 @@
 from django.contrib import admin, messages
-from .models import Alert, WastePoint, SystemConfig, Truck, CollectionRoute, RouteStop, RouteRun, TruckPosition
+from .models import Alert, WastePoint, SystemConfig, Truck, CollectionRoute, RouteStop, RouteRun, TruckPosition, PushSubscription
 
 admin.site.site_header = "EcoAlerta Pasco - Administración Municipal"
 admin.site.site_title = "EcoAlerta Admin"
@@ -287,3 +287,11 @@ class RouteRunAdmin(admin.ModelAdmin):
         'started_at', 'last_latitude', 'last_longitude', 'last_heading', 'last_speed_kmh', 'last_position_at',
     )
     inlines = [TruckPositionInline]
+
+
+@admin.register(PushSubscription)
+class PushSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'notify_ciudadana', 'notify_ambiental', 'district_filter', 'is_active', 'last_notified_at', 'updated_at')
+    list_filter = ('is_active', 'notify_ciudadana', 'notify_ambiental', 'district_filter')
+    search_fields = ('user__username', 'user_agent', 'endpoint')
+    readonly_fields = ('created_at', 'updated_at', 'last_notified_at')

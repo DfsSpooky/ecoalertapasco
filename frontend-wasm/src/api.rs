@@ -185,6 +185,14 @@ pub fn test_gemini_url() -> String {
     format!("{}/api/system/test-gemini/", api_base_url())
 }
 
+pub fn test_telegram_url() -> String {
+    format!("{}/api/system/test-telegram/", api_base_url())
+}
+
+pub fn push_test_url() -> String {
+    format!("{}/api/push/test/", api_base_url())
+}
+
 pub fn profile_url() -> String {
     format!("{}/api/auth/profile/", api_base_url())
 }

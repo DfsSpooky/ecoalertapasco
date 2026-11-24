@@ -2,13 +2,13 @@ use leptos::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use crate::api::{
-    alert_detail_url, alert_evidence_url, alerts_ciudadana_history_url, export_csv_url,
-    fetch_protected_image_blob_url, system_settings_url, test_gemini_url, upload_url,
-    waste_point_detail_url, waste_points_url,
+    alert_detail_url, alert_evidence_url, alerts_ciudadana_history_url, api_base_url, export_csv_url,
+    fetch_protected_image_blob_url, push_test_url, system_settings_url, test_gemini_url,
+    test_telegram_url, upload_url, waste_point_detail_url, waste_points_url,
 };
 use crate::components::fleet_routes_tab::FleetRoutesTab;
 use crate::models::{
-    AlertDomain, TruckRun,
+    AlertDomain, AuthorityNotification, TruckRun,
     AuthUser, CreateWastePointPayload, EcoAlert, EcoCategory, EcoDistrict, EcoSeverity, FillLevel,
     GeminiModelInfo, SystemSettingsResponse, TestGeminiResponse, WastePoint, WasteType,
 };
@@ -26,6 +26,7 @@ pub fn AuthorityDashboard(
     selected_waste_point_id: RwSignal<Option<String>>,
     show_waste_layer: RwSignal<bool>,
     truck_runs: RwSignal<Vec<TruckRun>>,
+    authority_notifications: RwSignal<Vec<AuthorityNotification>>,
 ) -> impl IntoView {
     let active_tab = create_rw_signal(0); // 0 = Denuncias, 1 = Puntos de Acopio, 2 = Rutas y Flota
     let citizen_history_alerts = create_rw_signal(Vec::<EcoAlert>::new());
@@ -121,11 +122,128 @@ pub fn AuthorityDashboard(
     let turnstile_sitekey_input = create_rw_signal("".to_string());
     let turnstile_secret_input = create_rw_signal("".to_string());
     let turnstile_enabled_input = create_rw_signal(true);
+    let telegram_enabled_input = create_rw_signal(false);
+    let telegram_token_input = create_rw_signal("".to_string());
+    let telegram_chat_id_input = create_rw_signal("".to_string());
+    let public_app_url_input = create_rw_signal("".to_string());
+    let is_testing_telegram = create_rw_signal(false);
+    let telegram_test_msg = create_rw_signal(None::<(bool, String)>);
     let gemini_test_result = create_rw_signal(None::<TestGeminiResponse>);
     let is_loading_settings = create_rw_signal(false);
     let is_saving_settings = create_rw_signal(false);
     let is_testing_gemini = create_rw_signal(false);
     let gemini_status_msg = create_rw_signal(None::<(bool, String)>);
+
+    // Web Push & In-App Notification Tray State (Serenazgo / Autoridades)
+    let show_notif_drawer = create_rw_signal(false);
+    let push_supported = create_rw_signal(true);
+    let push_subscribed = create_rw_signal(false);
+    let push_permission = create_rw_signal("default".to_string());
+    let push_busy = create_rw_signal(false);
+    let push_feedback = create_rw_signal(None::<(bool, String)>);
+
+    let refresh_push_state = move || {
+        spawn_local(async move {
+            if let Ok(promise) = js_sys::eval("window.ecoNotify && window.ecoNotify.getPushState ? window.ecoNotify.getPushState() : Promise.resolve('{}')") {
+                if let Ok(js_val) = JsFuture::from(js_sys::Promise::from(promise)).await {
+                    if let Some(raw) = js_val.as_string() {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                            push_supported.set(v.get("supported").and_then(|x| x.as_bool()).unwrap_or(false));
+                            push_subscribed.set(v.get("subscribed").and_then(|x| x.as_bool()).unwrap_or(false));
+                            if let Some(p) = v.get("permission").and_then(|x| x.as_str()) {
+                                push_permission.set(p.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    };
+
+    create_effect(move |_| {
+        if show_dashboard.get() {
+            refresh_push_state();
+        }
+    });
+
+    let toggle_push_subscription = move |_| {
+        let Some(user) = current_user.get() else {
+            show_auth_dialog.set(true);
+            return;
+        };
+        push_busy.set(true);
+        push_feedback.set(None);
+        let currently_sub = push_subscribed.get_untracked();
+        let token = user.token.clone();
+        let base = api_base_url();
+
+        spawn_local(async move {
+            let (Ok(base_json), Ok(tok_json)) = (serde_json::to_string(&base), serde_json::to_string(&token)) else {
+                push_busy.set(false);
+                return;
+            };
+            let js_call = if currently_sub {
+                format!("window.ecoNotify.unsubscribePush({}, {})", base_json, tok_json)
+            } else {
+                format!("window.ecoNotify.subscribePush({}, {})", base_json, tok_json)
+            };
+            match js_sys::eval(&js_call) {
+                Ok(promise) => match JsFuture::from(js_sys::Promise::from(promise)).await {
+                    Ok(res_val) => {
+                        if let Some(raw) = res_val.as_string() {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                                let ok = v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false);
+                                if ok {
+                                    let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("Preferencias de notificación actualizadas.").to_string();
+                                    push_feedback.set(Some((true, msg)));
+                                } else {
+                                    let err = v.get("error").and_then(|x| x.as_str()).unwrap_or("No se pudo actualizar Web Push.").to_string();
+                                    push_feedback.set(Some((false, err)));
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        push_feedback.set(Some((false, format!("Error del navegador: {:?}", e))));
+                    }
+                },
+                Err(e) => {
+                    push_feedback.set(Some((false, format!("Error invocando Push API: {:?}", e))));
+                }
+            }
+            refresh_push_state();
+            push_busy.set(false);
+        });
+    };
+
+    let send_test_push = move |_| {
+        let Some(user) = current_user.get() else {
+            show_auth_dialog.set(true);
+            return;
+        };
+        push_busy.set(true);
+        push_feedback.set(None);
+        let token = user.token.clone();
+        spawn_local(async move {
+            let _ = js_sys::eval("if (window.ecoNotify) { if (window.ecoNotify.playSiren) window.ecoNotify.playSiren('ciudadana'); if (window.ecoNotify.vibrate) window.ecoNotify.vibrate(); }");
+            match gloo_net::http::Request::post(&push_test_url())
+                .header("Authorization", &format!("Token {}", token))
+                .json(&serde_json::json!({}))
+            {
+                Ok(req) => match req.send().await {
+                    Ok(resp) => {
+                        let ok = resp.ok();
+                        let txt = resp.json::<serde_json::Value>().await.ok();
+                        let msg = txt.as_ref().and_then(|v| v.get("message").or_else(|| v.get("error")).and_then(|s| s.as_str())).unwrap_or(if ok { "Prueba enviada." } else { "Error enviando prueba Push." }).to_string();
+                        push_feedback.set(Some((ok, msg)));
+                    }
+                    Err(e) => push_feedback.set(Some((false, format!("Error de red: {:?}", e)))),
+                },
+                Err(e) => push_feedback.set(Some((false, format!("Error construyendo solicitud: {:?}", e)))),
+            }
+            push_busy.set(false);
+        });
+    };
 
     // Waste point modal state (Create & Edit)
     let show_create_waste_modal = create_rw_signal(false);
@@ -936,6 +1054,15 @@ pub fn AuthorityDashboard(
                             if let Some(en) = settings.turnstile_enabled {
                                 turnstile_enabled_input.set(en);
                             }
+                            if let Some(tg_en) = settings.telegram_enabled {
+                                telegram_enabled_input.set(tg_en);
+                            }
+                            if let Some(ref chat_id) = settings.telegram_chat_id {
+                                telegram_chat_id_input.set(chat_id.clone());
+                            }
+                            if let Some(ref pub_url) = settings.public_app_url {
+                                public_app_url_input.set(pub_url.clone());
+                            }
                             gemini_settings.set(Some(settings));
                         } else {
                             gemini_status_msg.set(Some((false, "Error al interpretar la configuración del sistema.".to_string())));
@@ -953,8 +1080,53 @@ pub fn AuthorityDashboard(
     };
 
     let open_gemini_modal = move |_| {
+        telegram_test_msg.set(None);
         show_gemini_modal.set(true);
         fetch_gemini_settings();
+    };
+
+    let test_telegram_connection = move |_| {
+        let user = match current_user.get() {
+            Some(u) if u.is_authority() => u,
+            _ => {
+                show_auth_dialog.set(true);
+                return;
+            }
+        };
+        is_testing_telegram.set(true);
+        telegram_test_msg.set(None);
+        let token_val = telegram_token_input.get().trim().to_string();
+        let chat_id_val = telegram_chat_id_input.get().trim().to_string();
+        let auth_tok = user.token.clone();
+
+        spawn_local(async move {
+            let mut payload = serde_json::Map::new();
+            if !token_val.is_empty() {
+                payload.insert("telegram_bot_token".to_string(), serde_json::Value::String(token_val));
+            }
+            if !chat_id_val.is_empty() {
+                payload.insert("telegram_chat_id".to_string(), serde_json::Value::String(chat_id_val));
+            }
+            match gloo_net::http::Request::post(&test_telegram_url())
+                .header("Authorization", &format!("Token {}", auth_tok))
+                .json(&serde_json::Value::Object(payload))
+            {
+                Ok(req) => match req.send().await {
+                    Ok(resp) => {
+                        let ok = resp.ok();
+                        let json_v = resp.json::<serde_json::Value>().await.ok();
+                        let msg = json_v.as_ref()
+                            .and_then(|v| v.get("message").or_else(|| v.get("error")).and_then(|s| s.as_str()))
+                            .unwrap_or(if ok { "Mensaje enviado." } else { "Error probando Telegram." })
+                            .to_string();
+                        telegram_test_msg.set(Some((ok, msg)));
+                    }
+                    Err(e) => telegram_test_msg.set(Some((false, format!("Error de red: {:?}", e)))),
+                },
+                Err(e) => telegram_test_msg.set(Some((false, format!("Error serializando: {:?}", e)))),
+            }
+            is_testing_telegram.set(false);
+        });
     };
 
     let test_gemini_connection = move |_| {
@@ -1038,6 +1210,10 @@ pub fn AuthorityDashboard(
         let ts_sitekey = turnstile_sitekey_input.get().trim().to_string();
         let ts_secret = turnstile_secret_input.get().trim().to_string();
         let ts_enabled = turnstile_enabled_input.get();
+        let tg_enabled = telegram_enabled_input.get();
+        let tg_token = telegram_token_input.get().trim().to_string();
+        let tg_chat_id = telegram_chat_id_input.get().trim().to_string();
+        let pub_url = public_app_url_input.get().trim().to_string();
 
         if key.is_empty() && !has_existing_key && enabled {
             gemini_status_msg.set(Some((false, "Ingresa una clave de API antes de activar Gemini.".to_string())));
@@ -1063,6 +1239,12 @@ pub fn AuthorityDashboard(
                 payload.insert("turnstile_secret_key".to_string(), serde_json::Value::String(ts_secret));
             }
             payload.insert("turnstile_enabled".to_string(), serde_json::Value::Bool(ts_enabled));
+            payload.insert("telegram_enabled".to_string(), serde_json::Value::Bool(tg_enabled));
+            if !tg_token.is_empty() {
+                payload.insert("telegram_bot_token".to_string(), serde_json::Value::String(tg_token));
+            }
+            payload.insert("telegram_chat_id".to_string(), serde_json::Value::String(tg_chat_id));
+            payload.insert("public_app_url".to_string(), serde_json::Value::String(pub_url));
 
             let res = gloo_net::http::Request::post(&system_settings_url())
                 .header("Authorization", &format!("Token {}", token))
@@ -1074,10 +1256,11 @@ pub fn AuthorityDashboard(
                         if resp.ok() {
                             gemini_key_input.set("".to_string());
                             turnstile_secret_input.set("".to_string());
+                            telegram_token_input.set("".to_string());
                             let success_text = if enabled {
-                                format!("¡Configuración guardada! Gemini ({}) y Cloudflare Turnstile actualizados.", model)
+                                format!("¡Configuración guardada! Gemini ({}), Turnstile y notificaciones actualizados.", model)
                             } else {
-                                "¡Configuración guardada! Modo manual activado y ajustes de Turnstile guardados.".to_string()
+                                "¡Configuración guardada! Modo manual activado y ajustes guardados.".to_string()
                             };
                             gemini_status_msg.set(Some((true, success_text)));
 
@@ -1193,7 +1376,7 @@ pub fn AuthorityDashboard(
                                 </div>
                             </div>
 
-                            <div class="flex items-center space-x-2">
+                            <div class="flex items-center space-x-2 flex-wrap justify-end gap-y-1.5">
                                 {move || current_user.get().map(|user| {
                                     let username = user.username.clone();
                                     let role = user.role_label();
@@ -1208,10 +1391,186 @@ pub fn AuthorityDashboard(
                                     }
                                 })}
 
+                                // Botón de Suscripción Web Push (Celular / PC Serenazgo)
+                                {move || push_supported.get().then(|| {
+                                    let is_sub = push_subscribed.get();
+                                    let is_denied = push_permission.get() == "denied";
+                                    let busy = push_busy.get();
+                                    view! {
+                                        <div class="flex items-center space-x-1">
+                                            <button
+                                                type="button"
+                                                disabled=busy || is_denied
+                                                class=move || {
+                                                    if is_denied {
+                                                        "px-3 py-2 text-xs font-semibold bg-red-50 text-red-600 border border-red-200 rounded-xl cursor-not-allowed flex items-center space-x-1.5"
+                                                    } else if is_sub {
+                                                        "px-3 py-2 text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
+                                                    } else {
+                                                        "px-3 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
+                                                    }
+                                                }
+                                                title=if is_denied {
+                                                    "Permiso bloqueado en el navegador. Habilítalo en la configuración del sitio."
+                                                } else if is_sub {
+                                                    "Alertas Push activas en este dispositivo (clic para desactivar)"
+                                                } else {
+                                                    "Activar notificaciones Push en este dispositivo incluso con pantalla bloqueada"
+                                                }
+                                                on:click=toggle_push_subscription
+                                            >
+                                                <span>{if is_denied { "🚫" } else if is_sub { "🔔" } else { "📲" }}</span>
+                                                <span class="hidden md:inline">
+                                                    {if busy {
+                                                        "Procesando..."
+                                                    } else if is_denied {
+                                                        "Push Bloqueado"
+                                                    } else if is_sub {
+                                                        "Alertas Push Activas"
+                                                    } else {
+                                                        "Activar Alertas Push"
+                                                    }}
+                                                </span>
+                                            </button>
+                                            {is_sub.then(|| view! {
+                                                <button
+                                                    type="button"
+                                                    disabled=busy
+                                                    class="px-2.5 py-2 text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl transition cursor-pointer"
+                                                    title="Enviar notificación Push y sonido de prueba a este dispositivo"
+                                                    on:click=send_test_push
+                                                >
+                                                    "Probar"
+                                                </button>
+                                            })}
+                                        </div>
+                                    }
+                                })}
+
+                                // Campanita / Bandeja de Notificaciones en Vivo
+                                <div class="relative">
+                                    <button
+                                        type="button"
+                                        class=move || {
+                                            let unread = authority_notifications.with(|l| l.iter().filter(|n| !n.read).count());
+                                            if unread > 0 {
+                                                "relative px-3 py-2 text-xs font-bold bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
+                                            } else {
+                                                "relative px-3 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
+                                            }
+                                        }
+                                        title="Bandeja de alertas recibidas en tiempo real"
+                                        on:click=move |_| show_notif_drawer.update(|v| *v = !*v)
+                                    >
+                                        <span>"🔔"</span>
+                                        <span class="hidden lg:inline">"Avisos"</span>
+                                        {move || {
+                                            let unread = authority_notifications.with(|l| l.iter().filter(|n| !n.read).count());
+                                            (unread > 0).then(|| view! {
+                                                <span class="px-1.5 py-0.2 rounded-full bg-red-600 text-white text-[10px] font-black animate-pulse">
+                                                    {unread}
+                                                </span>
+                                            })
+                                        }}
+                                    </button>
+
+                                    {move || show_notif_drawer.get().then(|| view! {
+                                        <div class="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl border border-slate-200 shadow-2xl z-50 overflow-hidden">
+                                            <div class="px-4 py-3 bg-slate-900 text-white flex items-center justify-between">
+                                                <div>
+                                                    <h4 class="text-xs font-bold">"Alertas Recientes en Vivo"</h4>
+                                                    <p class="text-[10px] text-slate-300">"Denuncias recibidas durante tu turno"</p>
+                                                </div>
+                                                <div class="flex items-center space-x-2">
+                                                    <button
+                                                        type="button"
+                                                        class="text-[10px] font-semibold text-emerald-300 hover:text-emerald-200 cursor-pointer"
+                                                        on:click=move |_| {
+                                                            authority_notifications.update(|list| {
+                                                                for n in list.iter_mut() {
+                                                                    n.read = true;
+                                                                }
+                                                            });
+                                                        }
+                                                    >
+                                                        "Marcar vistas"
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        class="text-slate-300 hover:text-white text-xs cursor-pointer"
+                                                        on:click=move |_| show_notif_drawer.set(false)
+                                                    >
+                                                        "✕"
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div class="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                                                {move || {
+                                                    let items = authority_notifications.get();
+                                                    if items.is_empty() {
+                                                        view! {
+                                                            <div class="p-6 text-center text-xs text-slate-500">
+                                                                "Sin alertas nuevas desde que iniciaste turno. Las denuncias urgentes aparecerán aquí con sirena y notificación."
+                                                            </div>
+                                                        }.into_view()
+                                                    } else {
+                                                        items.into_iter().map(|n| {
+                                                            let aid = n.alert_id.clone();
+                                                            let aid_click = n.alert_id.clone();
+                                                            let dom = n.domain;
+                                                            let is_unread = !n.read;
+                                                            view! {
+                                                                <div
+                                                                    class=if is_unread { "p-3 bg-red-50/60 hover:bg-red-50 cursor-pointer transition" } else { "p-3 bg-white hover:bg-slate-50 cursor-pointer transition" }
+                                                                    on:click=move |_| {
+                                                                        let target_id = aid_click.clone();
+                                                                        authority_notifications.update(|list| {
+                                                                            for item in list.iter_mut() {
+                                                                                if item.alert_id == target_id {
+                                                                                    item.read = true;
+                                                                                }
+                                                                            }
+                                                                        });
+                                                                        if active_domain.get_untracked() != dom {
+                                                                            active_domain.set(dom);
+                                                                        }
+                                                                        if let Some(found) = alerts.with_untracked(|list| list.iter().find(|a| a.id == target_id).cloned()) {
+                                                                            let _ = js_sys::eval(&format!(
+                                                                                "if (window.ecoMap && window.ecoMap.flyTo) window.ecoMap.flyTo({}, {}, 16.5);",
+                                                                                found.latitude, found.longitude
+                                                                            ));
+                                                                        }
+                                                                        selected_alert_id.set(Some(target_id));
+                                                                        show_notif_drawer.set(false);
+                                                                        show_dashboard.set(false);
+                                                                    }
+                                                                >
+                                                                    <div class="flex items-center justify-between gap-2">
+                                                                        <span class="text-[10px] font-bold uppercase tracking-wide text-indigo-700">
+                                                                            {if dom == AlertDomain::Ciudadana { "🛡️ Serenazgo" } else { "🌿 Ambiental" }}
+                                                                            " · " {n.category_label}
+                                                                        </span>
+                                                                        {is_unread.then(|| view! {
+                                                                            <span class="w-2 h-2 rounded-full bg-red-600 shrink-0"></span>
+                                                                        })}
+                                                                    </div>
+                                                                    <p class="text-xs font-bold text-slate-900 mt-0.5 line-clamp-1">{n.title}</p>
+                                                                    <p class="text-[11px] text-slate-600 line-clamp-1">"📍 " {n.address} " (" {n.district_label} ")"</p>
+                                                                    <p class="text-[10px] text-sky-700 font-semibold mt-1">{format!("Ver denuncia #{} en mapa →", aid)}</p>
+                                                                </div>
+                                                            }
+                                                        }).collect_view()
+                                                    }
+                                                }}
+                                            </div>
+                                        </div>
+                                    })}
+                                </div>
+
                                 {move || current_user.get().map(|u| u.can_manage_ambiental()).unwrap_or(false).then(|| view! {
                                     <button
                                         class="px-3.5 py-2 text-xs font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200 rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
-                                        title="Configurar IA Gemini y Seguridad Turnstile"
+                                        title="Configurar IA Gemini, Seguridad Turnstile y Bot Telegram"
                                         on:click=open_gemini_modal
                                     >
                                         <svg class="w-4 h-4 text-sky-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1235,6 +1594,23 @@ pub fn AuthorityDashboard(
                             </button>
                         </div>
                     </header>
+
+                    {move || push_feedback.get().map(|(ok, msg)| view! {
+                        <div class=if ok {
+                            "mx-4 sm:mx-8 mt-3 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-center justify-between gap-3"
+                        } else {
+                            "mx-4 sm:mx-8 mt-3 px-4 py-2.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs font-medium flex items-center justify-between gap-3"
+                        }>
+                            <span>{if ok { "✅ " } else { "⚠️ " }} {msg}</span>
+                            <button
+                                type="button"
+                                class="text-xs font-bold opacity-70 hover:opacity-100 cursor-pointer"
+                                on:click=move |_| push_feedback.set(None)
+                            >
+                                "✕"
+                            </button>
+                        </div>
+                    })}
 
                     // Dashboard Tabs Selector
                     <div class="bg-white border-b border-slate-200/80 px-4 sm:px-8 py-2.5">
@@ -3290,6 +3666,139 @@ pub fn AuthorityDashboard(
                                                             "Abrir Cloudflare Turnstile →"
                                                         </a>
                                                     </div>
+                                                </div>
+                                            }
+                                        }
+
+                                        // ==================== TELEGRAM SERENAZGO BOT SECTION ====================
+                                        {
+                                            let has_tg_tok = settings_opt.as_ref().and_then(|s| s.has_telegram_token).unwrap_or(false);
+                                            let masked_tg_tok = settings_opt.as_ref().and_then(|s| s.telegram_token_masked.clone()).unwrap_or_default();
+
+                                            view! {
+                                                <div class="p-4 rounded-xl border border-slate-200 bg-white shadow-xs space-y-3">
+                                                    <div class="flex items-center justify-between">
+                                                        <div class="flex items-center space-x-2">
+                                                            <div class="w-7 h-7 rounded-lg bg-sky-50 text-sky-700 flex items-center justify-center font-bold text-sm">
+                                                                "📨"
+                                                            </div>
+                                                            <div>
+                                                                <span class="font-bold text-slate-800 text-xs block">
+                                                                    "Canal Respaldo en Campo (Telegram Bot Serenazgo)"
+                                                                </span>
+                                                                <span class="text-[10px] text-slate-400">
+                                                                    "Envía al instante denuncias de Seguridad Ciudadana y alertas críticas al grupo de Telegram"
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <div class="flex items-center space-x-2">
+                                                            {move || if telegram_enabled_input.get() {
+                                                                view! { <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold">"Activado"</span> }
+                                                            } else {
+                                                                view! { <span class="px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-bold">"Desactivado"</span> }
+                                                            }}
+                                                            <button
+                                                                type="button"
+                                                                class=move || {
+                                                                    if telegram_enabled_input.get() {
+                                                                        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-emerald-600 transition-colors duration-200 ease-in-out focus:outline-hidden"
+                                                                    } else {
+                                                                        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-slate-200 transition-colors duration-200 ease-in-out focus:outline-hidden"
+                                                                    }
+                                                                }
+                                                                on:click=move |_| telegram_enabled_input.update(|v| *v = !*v)
+                                                            >
+                                                                <span
+                                                                    class=move || {
+                                                                        if telegram_enabled_input.get() {
+                                                                            "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out translate-x-4"
+                                                                        } else {
+                                                                            "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out translate-x-0"
+                                                                        }
+                                                                    }
+                                                                ></span>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                                                        <div>
+                                                            <div class="flex items-center justify-between mb-1">
+                                                                <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                                                    "Bot Token (@BotFather)"
+                                                                </label>
+                                                                {if has_tg_tok {
+                                                                    view! {
+                                                                        <span class="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                                                            {format!("✓ {}", masked_tg_tok)}
+                                                                        </span>
+                                                                    }.into_view()
+                                                                } else {
+                                                                    view! {
+                                                                        <span class="text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                                                            "Sin configurar"
+                                                                        </span>
+                                                                    }.into_view()
+                                                                }}
+                                                            </div>
+                                                            <input
+                                                                type="password"
+                                                                placeholder={if has_tg_tok { "Reemplazar token o dejar vacío..." } else { "123456789:ABCdef..." }}
+                                                                class="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-sky-500"
+                                                                prop:value=move || telegram_token_input.get()
+                                                                on:input=move |e| telegram_token_input.set(event_target_value(&e))
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                                                "Chat ID del Grupo"
+                                                            </label>
+                                                            <input
+                                                                type="text"
+                                                                placeholder="-1001234567890"
+                                                                class="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-sky-500"
+                                                                prop:value=move || telegram_chat_id_input.get()
+                                                                on:input=move |e| telegram_chat_id_input.set(event_target_value(&e))
+                                                            />
+                                                        </div>
+                                                    </div>
+
+                                                    <div>
+                                                        <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                                            "URL Pública de EcoAlerta (para enlace directo en el mensaje)"
+                                                        </label>
+                                                        <input
+                                                            type="text"
+                                                            placeholder="https://ecoalerta.duckdns.org"
+                                                            class="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-sky-500"
+                                                            prop:value=move || public_app_url_input.get()
+                                                            on:input=move |e| public_app_url_input.set(event_target_value(&e))
+                                                        />
+                                                    </div>
+
+                                                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                                                        <span class="text-[10px] text-slate-400">
+                                                            "Crea tu bot con @BotFather, agrégalo al grupo de Serenazgo y obtén el Chat ID."
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            disabled=move || is_testing_telegram.get() || is_saving_settings.get()
+                                                            class="px-3 py-1.5 text-[11px] font-semibold bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded-xl transition shrink-0 cursor-pointer"
+                                                            on:click=test_telegram_connection
+                                                        >
+                                                            {move || if is_testing_telegram.get() { "Enviando prueba..." } else { "📨 Probar Envío a Telegram" }}
+                                                        </button>
+                                                    </div>
+
+                                                    {move || telegram_test_msg.get().map(|(ok, msg)| view! {
+                                                        <div class=if ok {
+                                                            "p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-medium"
+                                                        } else {
+                                                            "p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-[11px] font-medium"
+                                                        }>
+                                                            {if ok { "✅ " } else { "⚠️ " }} {msg}
+                                                        </div>
+                                                    })}
                                                 </div>
                                             }
                                         }

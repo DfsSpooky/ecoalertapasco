@@ -171,6 +171,14 @@ impl EcoSeverity {
     pub fn all() -> &'static [EcoSeverity] {
         &[EcoSeverity::Critico, EcoSeverity::Medio, EcoSeverity::Bajo]
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EcoSeverity::Critico => "critico",
+            EcoSeverity::Medio => "medio",
+            EcoSeverity::Bajo => "bajo",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -355,6 +363,13 @@ impl AuthUser {
 
     pub fn can_manage_ciudadana(&self) -> bool {
         self.is_serenazgo || self.is_superuser
+    }
+
+    pub fn can_manage_domain(&self, domain: AlertDomain) -> bool {
+        match domain {
+            AlertDomain::Ciudadana => self.can_manage_ciudadana(),
+            AlertDomain::Ambiental => self.can_manage_ambiental(),
+        }
     }
 
     pub fn role_label(&self) -> &'static str {
@@ -791,6 +806,29 @@ pub struct SystemSettingsResponse {
     pub has_turnstile_secret: Option<bool>,
     #[serde(default)]
     pub turnstile_enabled: Option<bool>,
+    #[serde(default)]
+    pub telegram_enabled: Option<bool>,
+    #[serde(default)]
+    pub has_telegram_token: Option<bool>,
+    #[serde(default)]
+    pub telegram_token_masked: Option<String>,
+    #[serde(default)]
+    pub telegram_chat_id: Option<String>,
+    #[serde(default)]
+    pub public_app_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuthorityNotification {
+    pub alert_id: String,
+    pub title: String,
+    pub address: String,
+    pub district_label: String,
+    pub category_label: String,
+    pub severity: EcoSeverity,
+    pub domain: AlertDomain,
+    pub created_at: String,
+    pub read: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

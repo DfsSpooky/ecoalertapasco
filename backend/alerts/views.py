@@ -35,6 +35,7 @@ from .models import (
     Truck,
     CollectionRoute,
     RouteRun,
+    PushSubscription,
     is_collector,
     is_serenazgo,
     can_manage_domain,
@@ -1798,6 +1799,11 @@ class SystemSettingsView(APIView):
         turnstile_enabled = SystemConfig.get_value('TURNSTILE_ENABLED', os.environ.get('TURNSTILE_ENABLED', 'true')).strip().lower() in ('true', '1', 'yes')
         masked_turnstile_secret = f"{turnstile_secret[:4]}...{turnstile_secret[-4:]}" if len(turnstile_secret) > 8 else "********"
 
+        from .notifications import get_telegram_settings
+        tg = get_telegram_settings()
+        tg_token = tg['bot_token']
+        masked_tg_token = f"{tg_token[:6]}...{tg_token[-4:]}" if len(tg_token) > 10 else ("********" if tg_token else "")
+
         return Response({
             'has_gemini_key': has_key,
             'masked_key': masked,
@@ -1810,6 +1816,11 @@ class SystemSettingsView(APIView):
             'turnstile_secret_masked': masked_turnstile_secret,
             'has_turnstile_secret': bool(turnstile_secret),
             'turnstile_enabled': turnstile_enabled,
+            'telegram_enabled': tg['enabled'],
+            'has_telegram_token': bool(tg_token),
+            'telegram_token_masked': masked_tg_token,
+            'telegram_chat_id': tg['chat_id'],
+            'public_app_url': tg['public_app_url'],
         })
 
     def post(self, request):
@@ -1820,8 +1831,24 @@ class SystemSettingsView(APIView):
         has_turnstile_sitekey = 'turnstile_sitekey' in request.data
         has_turnstile_secret = 'turnstile_secret_key' in request.data
         has_turnstile_enabled = 'turnstile_enabled' in request.data
+        has_telegram_enabled = 'telegram_enabled' in request.data
+        has_telegram_token = 'telegram_bot_token' in request.data
+        has_telegram_chat_id = 'telegram_chat_id' in request.data
+        has_public_app_url = 'public_app_url' in request.data
 
-        if not gemini_api_key and not gemini_model and not has_gemini_enabled and not has_google_client_id and not has_turnstile_sitekey and not has_turnstile_secret and not has_turnstile_enabled:
+        if (
+            not gemini_api_key
+            and not gemini_model
+            and not has_gemini_enabled
+            and not has_google_client_id
+            and not has_turnstile_sitekey
+            and not has_turnstile_secret
+            and not has_turnstile_enabled
+            and not has_telegram_enabled
+            and not has_telegram_token
+            and not has_telegram_chat_id
+            and not has_public_app_url
+        ):
             return Response({'error': 'Debes enviar al menos un parámetro de configuración a actualizar.'}, status=status.HTTP_400_BAD_REQUEST)
 
         if has_gemini_enabled:
@@ -1874,6 +1901,36 @@ class SystemSettingsView(APIView):
                 defaults={'value': t_enabled_str, 'description': 'Activar protección anti-bot Cloudflare Turnstile'}
             )
 
+        if has_telegram_enabled:
+            raw_tg_enabled = request.data.get('telegram_enabled')
+            tg_enabled_str = 'true' if str(raw_tg_enabled).lower() in ('true', '1', 'yes', 'si') else 'false'
+            SystemConfig.objects.update_or_create(
+                key='telegram_enabled',
+                defaults={'value': tg_enabled_str, 'description': 'Activar notificaciones inmediatas al grupo de Serenazgo en Telegram'}
+            )
+
+        if has_telegram_token:
+            val_tg_tok = request.data.get('telegram_bot_token', '').strip()
+            if val_tg_tok:
+                SystemConfig.objects.update_or_create(
+                    key='telegram_bot_token',
+                    defaults={'value': val_tg_tok, 'description': 'Token del Bot de Telegram para alertas de Serenazgo'}
+                )
+
+        if has_telegram_chat_id:
+            val_chat_id = request.data.get('telegram_chat_id', '').strip()
+            SystemConfig.objects.update_or_create(
+                key='telegram_chat_id',
+                defaults={'value': val_chat_id, 'description': 'Chat ID o Grupo de Telegram de Serenazgo'}
+            )
+
+        if has_public_app_url:
+            val_pub_url = request.data.get('public_app_url', '').strip().rstrip('/')
+            SystemConfig.objects.update_or_create(
+                key='public_app_url',
+                defaults={'value': val_pub_url, 'description': 'URL pública de EcoAlerta para enlaces directos en notificaciones'}
+            )
+
         current_key = SystemConfig.get_value('gemini_api_key')
         current_model = SystemConfig.get_value('gemini_model', default='gemini-1.5-flash')
         gemini_enabled = SystemConfig.is_gemini_enabled()
@@ -1881,6 +1938,11 @@ class SystemSettingsView(APIView):
         turnstile_sitekey = SystemConfig.get_value('TURNSTILE_SITEKEY', os.environ.get('TURNSTILE_SITEKEY', '1x00000000000000000000AA')).strip()
         turnstile_secret = SystemConfig.get_value('TURNSTILE_SECRET_KEY', os.environ.get('TURNSTILE_SECRET_KEY', '1x0000000000000000000000000000000AA')).strip()
         turnstile_enabled = SystemConfig.get_value('TURNSTILE_ENABLED', os.environ.get('TURNSTILE_ENABLED', 'true')).strip().lower() in ('true', '1', 'yes')
+
+        from .notifications import get_telegram_settings
+        tg = get_telegram_settings()
+        tg_token = tg['bot_token']
+        masked_tg_token = f"{tg_token[:6]}...{tg_token[-4:]}" if len(tg_token) > 10 else ("********" if tg_token else "")
 
         return Response({
             'success': True,
@@ -1894,6 +1956,11 @@ class SystemSettingsView(APIView):
             'google_auth_configured': bool(google_client_id),
             'turnstile_sitekey': turnstile_sitekey,
             'turnstile_enabled': turnstile_enabled,
+            'telegram_enabled': tg['enabled'],
+            'has_telegram_token': bool(tg_token),
+            'telegram_token_masked': masked_tg_token,
+            'telegram_chat_id': tg['chat_id'],
+            'public_app_url': tg['public_app_url'],
         })
 
 
@@ -2449,5 +2516,169 @@ class HealthCheckView(APIView):
                 "total_waste_points": total_waste_points,
             }
         })
+
+
+class PushVapidKeyView(APIView):
+    """Retorna la llave pública VAPID para suscribir navegadores/celulares de Serenazgo y autoridades."""
+    permission_classes = [IsAlertAuthority]
+
+    def get(self, request):
+        from .notifications import get_or_create_vapid_keys
+        _, public_key = get_or_create_vapid_keys()
+        return Response({"public_key": public_key})
+
+
+class PushSubscriptionView(APIView):
+    """Gestiona las suscripciones Web Push (VAPID) del usuario autenticado (Serenazgo / Inspector)."""
+    permission_classes = [IsAlertAuthority]
+
+    def get(self, request):
+        qs = PushSubscription.objects.filter(user=request.user, is_active=True).order_by("-updated_at")
+        items = [
+            {
+                "id": sub.id,
+                "user_agent": sub.user_agent,
+                "district_filter": sub.district_filter,
+                "notify_ciudadana": sub.notify_ciudadana,
+                "notify_ambiental": sub.notify_ambiental,
+                "last_notified_at": sub.last_notified_at.isoformat() if sub.last_notified_at else None,
+                "updated_at": sub.updated_at.isoformat(),
+            }
+            for sub in qs
+        ]
+        return Response({
+            "active_subscriptions": len(items),
+            "subscriptions": items,
+        })
+
+    def post(self, request):
+        sub_data = request.data.get("subscription") if isinstance(request.data.get("subscription"), dict) else request.data
+        endpoint = str(sub_data.get("endpoint") or "").strip()
+        keys = sub_data.get("keys") if isinstance(sub_data.get("keys"), dict) else {}
+        p256dh = str(keys.get("p256dh") or sub_data.get("p256dh") or "").strip()
+        auth = str(keys.get("auth") or sub_data.get("auth") or "").strip()
+
+        if not endpoint or not p256dh or not auth:
+            return Response(
+                {"error": "Suscripción Web Push incompleta (se requiere endpoint, keys.p256dh y keys.auth)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        parsed = urllib.parse.urlparse(endpoint)
+        if parsed.scheme not in ("https", "http") or not parsed.netloc:
+            return Response({"error": "Endpoint Web Push inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        district_filter = str(request.data.get("district_filter") or "").strip()
+        valid_districts = {c[0] for c in Alert.DISTRICT_CHOICES}
+        if district_filter and district_filter not in valid_districts:
+            district_filter = ""
+
+        notify_ciudadana = request.data.get("notify_ciudadana", True)
+        notify_ambiental = request.data.get("notify_ambiental", True)
+        user_agent = str(request.data.get("user_agent") or request.META.get("HTTP_USER_AGENT", ""))[:250]
+
+        sub, created = PushSubscription.objects.update_or_create(
+            endpoint=endpoint,
+            defaults={
+                "user": request.user,
+                "p256dh": p256dh,
+                "auth": auth,
+                "user_agent": user_agent,
+                "district_filter": district_filter,
+                "notify_ciudadana": str(notify_ciudadana).lower() in ("true", "1", "yes", "si"),
+                "notify_ambiental": str(notify_ambiental).lower() in ("true", "1", "yes", "si"),
+                "is_active": True,
+            },
+        )
+        return Response(
+            {
+                "success": True,
+                "created": created,
+                "id": sub.id,
+                "notify_ciudadana": sub.notify_ciudadana,
+                "notify_ambiental": sub.notify_ambiental,
+                "district_filter": sub.district_filter,
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    def delete(self, request):
+        endpoint = str(request.data.get("endpoint") or request.query_params.get("endpoint") or "").strip()
+        qs = PushSubscription.objects.filter(user=request.user, is_active=True)
+        if endpoint:
+            qs = qs.filter(endpoint=endpoint)
+        updated = qs.update(is_active=False)
+        return Response({"success": True, "deactivated": updated})
+
+
+class PushTestView(APIView):
+    """Envía una notificación Web Push de prueba al usuario autenticado (Serenazgo / Autoridad)."""
+    permission_classes = [IsAlertAuthority]
+
+    def post(self, request):
+        from .notifications import get_or_create_vapid_keys, get_vapid_claim_sub, send_webpush_to_subscription
+
+        subs = list(PushSubscription.objects.filter(user=request.user, is_active=True))
+        endpoint = str(request.data.get("endpoint") or "").strip()
+        if endpoint:
+            subs = [s for s in subs if s.endpoint == endpoint]
+
+        if not subs:
+            return Response(
+                {"error": "No tienes dispositivos suscritos a notificaciones Push. Actívalas primero en este navegador."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        priv_key, _ = get_or_create_vapid_keys()
+        claim_sub = get_vapid_claim_sub()
+        payload = {
+            "type": "test_push",
+            "alert_id": "",
+            "domain": "ciudadana",
+            "severity": "critico",
+            "title": "🚨 Prueba Serenazgo · EcoAlerta Pasco",
+            "body": "Tu dispositivo está listo para recibir denuncias urgentes incluso con la pantalla bloqueada.",
+            "url": "/?vista=ciudadana",
+        }
+        sent = 0
+        for sub in subs:
+            if send_webpush_to_subscription(sub, payload, priv_key, claim_sub):
+                sent += 1
+
+        if sent == 0:
+            return Response(
+                {"error": "No se pudo entregar la notificación push al dispositivo (revisa si el permiso fue revocado)."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response({
+            "success": True,
+            "sent": sent,
+            "total": len(subs),
+            "message": f"Notificación de prueba enviada a {sent} dispositivo(s).",
+        })
+
+
+class TestTelegramView(APIView):
+    """Prueba la conexión y envío de mensajes al grupo de Telegram de Serenazgo."""
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request):
+        from .notifications import get_telegram_settings, send_telegram_test_message
+
+        cfg = get_telegram_settings()
+        token = str(request.data.get("telegram_bot_token") or "").strip() or cfg["bot_token"]
+        chat_id = str(request.data.get("telegram_chat_id") or "").strip() or cfg["chat_id"]
+
+        if not token or not chat_id:
+            return Response(
+                {"success": False, "error": "Debes ingresar el Bot Token y el Chat ID de Telegram antes de probar."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ok, msg = send_telegram_test_message(token, chat_id)
+        return Response(
+            {"success": ok, "message": msg},
+            status=status.HTTP_200_OK if ok else status.HTTP_400_BAD_REQUEST,
+        )
 
 

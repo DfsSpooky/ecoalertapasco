@@ -28,7 +28,7 @@ use components::{
     waste_list_modal::WasteListModal,
 };
 use models::{
-    AlertDomain, CollectionRoute, EcoAlert, TruckRun, EcoCategory, EcoDistrict, EcoSeverity, SyncResponse, SyncStatus, WastePoint,
+    AlertDomain, AuthorityNotification, CollectionRoute, EcoAlert, TruckRun, EcoCategory, EcoDistrict, EcoSeverity, SyncResponse, SyncStatus, WastePoint,
     WsServerMessage,
 };
 use storage::{clear_auth_session, load_auth_session};
@@ -61,11 +61,27 @@ fn detect_initial_domain() -> AlertDomain {
     AlertDomain::Ambiental
 }
 
+fn detect_initial_alert_id() -> Option<String> {
+    let win = web_sys::window()?;
+    let search = win.location().search().ok()?;
+    let trimmed = search.trim_start_matches('?');
+    for pair in trimmed.split('&') {
+        let mut kv = pair.splitn(2, '=');
+        let key = kv.next().unwrap_or("");
+        let val = kv.next().unwrap_or("").trim();
+        if key == "alert_id" && !val.is_empty() {
+            return Some(val.to_string());
+        }
+    }
+    None
+}
+
 #[component]
 fn App() -> impl IntoView {
     // Production state: initialized strictly empty (zero mocks or assumptions; truth comes from server)
     let initial_domain = detect_initial_domain();
     let active_domain = create_rw_signal(initial_domain);
+    let pending_open_alert_id = create_rw_signal(detect_initial_alert_id());
     let alerts = create_rw_signal(Vec::<EcoAlert>::new());
     let selected_categories = create_rw_signal(HashSet::from_iter(EcoCategory::for_domain(initial_domain).iter().copied()));
     let selected_severities = create_rw_signal(HashSet::from_iter(EcoSeverity::all().iter().copied()));
@@ -87,6 +103,7 @@ fn App() -> impl IntoView {
 
     // Live critical alert early-warning banner (triggered ONLY by real incoming critical reports)
     let active_emergency_alert = create_rw_signal(None::<EcoAlert>);
+    let authority_notifications = create_rw_signal(Vec::<AuthorityNotification>::new());
 
     // Solid waste & truck routes layer state
     let waste_points = create_rw_signal(Vec::<WastePoint>::new());
@@ -135,10 +152,60 @@ fn App() -> impl IntoView {
         }
     });
 
-    // Expose resolved production API base URL to JS helpers (PDF QR verification) & initialize Web Notifications
+    // Expose resolved production API base URL to JS helpers (PDF QR verification)
     create_effect(move |_| {
         sync_js_api_base();
-        let _ = js_sys::eval("if (window.ecoNotify && typeof window.ecoNotify.requestPermission === 'function') { window.ecoNotify.requestPermission(); }");
+    });
+
+    // Escuchar eventos del Service Worker al tocar una notificación Push (eco-open-alert)
+    create_effect(move |already_bound: Option<()>| {
+        if already_bound.is_some() {
+            return;
+        }
+        if let Some(win) = web_sys::window() {
+            if let Ok(pending_val) = js_sys::Reflect::get(&win, &"__ECOALERTA_PENDING_OPEN_ALERT__".into()) {
+                if let Some(id_str) = pending_val.as_string() {
+                    if !id_str.trim().is_empty() {
+                        pending_open_alert_id.set(Some(id_str));
+                    }
+                }
+            }
+            let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+                if let Ok(detail) = js_sys::Reflect::get(&ev, &"detail".into()) {
+                    if let Ok(aid) = js_sys::Reflect::get(&detail, &"alert_id".into()) {
+                        if let Some(id_str) = aid.as_string() {
+                            if !id_str.trim().is_empty() {
+                                pending_open_alert_id.set(Some(id_str));
+                            }
+                        }
+                    }
+                }
+            });
+            let _ = win.add_event_listener_with_callback("eco-open-alert", cb.as_ref().unchecked_ref());
+            cb.forget();
+        }
+    });
+
+    // Abrir automáticamente la denuncia solicitada vía URL (?alert_id=...) o notificación Push
+    create_effect(move |_| {
+        let Some(target_id) = pending_open_alert_id.get() else {
+            return;
+        };
+        let list = alerts.get();
+        if let Some(found) = list.into_iter().find(|a| a.id == target_id) {
+            let dom = found.category.domain();
+            if active_domain.get_untracked() != dom {
+                active_domain.set(dom);
+            }
+            show_authority_dashboard.set(false);
+            show_transparency_portal.set(false);
+            selected_alert_id.set(Some(found.id.clone()));
+            let _ = js_sys::eval(&format!(
+                "if (window.ecoMap && window.ecoMap.flyTo) window.ecoMap.flyTo({}, {}, 16.5);",
+                found.latitude, found.longitude
+            ));
+            pending_open_alert_id.set(None);
+        }
     });
 
     // Security guard: Ensure authority dashboard is closed if user logs out or lacks authority permissions
@@ -163,15 +230,24 @@ fn App() -> impl IntoView {
                     if resp.ok() {
                         if let Ok(profile_data) = resp.json::<serde_json::Value>().await {
                             let backend_is_staff = profile_data.get("is_staff").and_then(|v| v.as_bool()).unwrap_or(false);
+                            let backend_is_superuser = profile_data.get("is_superuser").and_then(|v| v.as_bool()).unwrap_or(false);
                             let backend_is_collector = profile_data.get("is_collector").and_then(|v| v.as_bool()).unwrap_or(false);
+                            let backend_is_serenazgo = profile_data.get("is_serenazgo").and_then(|v| v.as_bool()).unwrap_or(false);
                             let needs_update = current_user.with_untracked(|u_opt| {
-                                u_opt.as_ref().map(|u| u.is_staff != backend_is_staff || u.is_collector != backend_is_collector).unwrap_or(false)
+                                u_opt.as_ref().map(|u| {
+                                    u.is_staff != backend_is_staff
+                                        || u.is_superuser != backend_is_superuser
+                                        || u.is_collector != backend_is_collector
+                                        || u.is_serenazgo != backend_is_serenazgo
+                                }).unwrap_or(false)
                             });
                             if needs_update {
                                 current_user.update(|u_opt| {
                                     if let Some(ref mut u) = u_opt {
                                         u.is_staff = backend_is_staff;
+                                        u.is_superuser = backend_is_superuser;
                                         u.is_collector = backend_is_collector;
+                                        u.is_serenazgo = backend_is_serenazgo;
                                         crate::storage::save_auth_session(u);
                                     }
                                 });
@@ -336,20 +412,90 @@ fn App() -> impl IntoView {
                                         || incoming.reporter_name.as_deref() == cur.full_name.as_deref()
                                 }).unwrap_or(false)
                             });
-                            if has_completed_initial_sync.get_untracked()
+                            let auth_info = current_user.with_untracked(|u| {
+                                u.as_ref().map(|cur| {
+                                    (
+                                        cur.is_authority(),
+                                        cur.can_manage_domain(incoming.category.domain()),
+                                    )
+                                }).unwrap_or((false, false))
+                            });
+                            let (is_auth, can_manage_inc_domain) = auth_info;
+                            let inc_domain = incoming.category.domain();
+                            let should_notify_authority = has_completed_initial_sync.get_untracked()
+                                && is_auth
+                                && can_manage_inc_domain
+                                && incoming.status == "pending"
+                                && (inc_domain == AlertDomain::Ciudadana || incoming.severity == EcoSeverity::Critico);
+                            let should_notify_citizen = has_completed_initial_sync.get_untracked()
+                                && !is_auth
                                 && incoming.severity == EcoSeverity::Critico
                                 && incoming.status == "pending"
-                                && incoming.category.domain() == active_domain.get_untracked()
-                                && !is_own
-                            {
-                                active_emergency_alert.set(Some(incoming.clone()));
-                                if let (Ok(t_json), Ok(d_json)) = (
-                                    serde_json::to_string(&incoming.title),
-                                    serde_json::to_string(&incoming.address),
+                                && inc_domain == active_domain.get_untracked()
+                                && !is_own;
+
+                            if should_notify_authority {
+                                let notif = AuthorityNotification {
+                                    alert_id: incoming.id.clone(),
+                                    title: incoming.title.clone(),
+                                    address: incoming.address.clone(),
+                                    district_label: incoming.district.display_name().to_string(),
+                                    category_label: incoming.category.display_name().to_string(),
+                                    severity: incoming.severity,
+                                    domain: inc_domain,
+                                    created_at: incoming.created_at.clone(),
+                                    read: false,
+                                };
+                                authority_notifications.update(|items| {
+                                    if !items.iter().any(|n| n.alert_id == notif.alert_id) {
+                                        items.insert(0, notif);
+                                        if items.len() > 30 {
+                                            items.truncate(30);
+                                        }
+                                    }
+                                });
+
+                                if incoming.severity == EcoSeverity::Critico || inc_domain == AlertDomain::Ciudadana {
+                                    active_emergency_alert.set(Some(incoming.clone()));
+                                }
+
+                                let siren_level = if inc_domain == AlertDomain::Ciudadana {
+                                    "ciudadana"
+                                } else {
+                                    incoming.severity.as_str()
+                                };
+                                let prefix = if inc_domain == AlertDomain::Ciudadana {
+                                    "🚨 Serenazgo Pasco"
+                                } else {
+                                    "🌿 Alerta Crítica"
+                                };
+                                let notif_title = format!("{} · {}", prefix, incoming.category.display_name());
+                                let notif_body = format!("{} — 📍 {} ({})", incoming.title, incoming.address, incoming.district.display_name());
+                                let vista = if inc_domain == AlertDomain::Ciudadana { "ciudadana" } else { "ambiental" };
+                                let target_url = format!("/?vista={}&alert_id={}", vista, incoming.id);
+
+                                if let (Ok(t_json), Ok(b_json), Ok(u_json), Ok(id_json), Ok(sev_json)) = (
+                                    serde_json::to_string(&notif_title),
+                                    serde_json::to_string(&notif_body),
+                                    serde_json::to_string(&target_url),
+                                    serde_json::to_string(&incoming.id),
+                                    serde_json::to_string(&siren_level),
                                 ) {
                                     let _ = js_sys::eval(&format!(
-                                        "if (window.ecoNotify && typeof window.ecoNotify.send === 'function') {{ window.ecoNotify.send({}, {}); }}",
-                                        t_json, d_json
+                                        "if (window.ecoNotify) {{ if (window.ecoNotify.playSiren) window.ecoNotify.playSiren({}); if (window.ecoNotify.vibrate) window.ecoNotify.vibrate(); if (window.ecoNotify.sendNotification) window.ecoNotify.sendNotification({}, {}, null, {}, {}); }}",
+                                        sev_json, t_json, b_json, u_json, id_json
+                                    ));
+                                }
+                            } else if should_notify_citizen {
+                                active_emergency_alert.set(Some(incoming.clone()));
+                                if let (Ok(t_json), Ok(d_json), Ok(id_json)) = (
+                                    serde_json::to_string(&incoming.title),
+                                    serde_json::to_string(&incoming.address),
+                                    serde_json::to_string(&incoming.id),
+                                ) {
+                                    let _ = js_sys::eval(&format!(
+                                        "if (window.ecoNotify && typeof window.ecoNotify.sendNotification === 'function') {{ window.ecoNotify.sendNotification({}, {}, null, '/', {}); }}",
+                                        t_json, d_json, id_json
                                     ));
                                 }
                             }
@@ -774,6 +920,8 @@ fn App() -> impl IntoView {
                 active_emergency=active_emergency_alert
                 inspection_target=inspection_target
                 selected_alert_id=selected_alert_id
+                active_domain=active_domain
+                show_authority_dashboard=show_authority_dashboard
             />
 
             // Command Center Sidebar
@@ -798,6 +946,7 @@ fn App() -> impl IntoView {
                 on_manual_sync=on_manual_sync
                 show_user_profile=show_user_profile
                 is_collapsed=is_sidebar_collapsed
+                authority_notifications=authority_notifications
             />
 
             // Map View
@@ -875,6 +1024,7 @@ fn App() -> impl IntoView {
                 selected_waste_point_id=selected_waste_point_id
                 show_waste_layer=show_waste_layer
                 truck_runs=truck_runs
+                authority_notifications=authority_notifications
             />
 
             // Report Incident Dialog

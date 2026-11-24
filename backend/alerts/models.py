@@ -403,3 +403,39 @@ class TruckPosition(models.Model):
 
     def __str__(self):
         return f"{self.run_id} @ {self.recorded_at:%H:%M:%S}"
+
+
+class PushSubscription(models.Model):
+    """Suscripción Web Push (VAPID) de un dispositivo autorizado (Serenazgo / Inspector)."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='push_subscriptions',
+        verbose_name="Usuario",
+    )
+    endpoint = models.TextField(unique=True, verbose_name="Endpoint Push")
+    p256dh = models.CharField(max_length=255, verbose_name="Clave Pública P256DH")
+    auth = models.CharField(max_length=255, verbose_name="Auth Secret")
+    user_agent = models.CharField(max_length=255, blank=True, default='', verbose_name="Dispositivo / Navegador")
+    district_filter = models.CharField(
+        max_length=30,
+        blank=True,
+        default='',
+        verbose_name="Filtro de Distrito (vacío = todos)",
+    )
+    notify_ciudadana = models.BooleanField(default=True, verbose_name="Recibir Seguridad Ciudadana")
+    notify_ambiental = models.BooleanField(default=True, verbose_name="Recibir Ambiental Crítica")
+    is_active = models.BooleanField(default=True, db_index=True, verbose_name="Activa")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_notified_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Suscripción Web Push"
+        verbose_name_plural = "Suscripciones Web Push"
+        ordering = ['-updated_at']
+        indexes = [models.Index(fields=['user', 'is_active'])]
+
+    def __str__(self):
+        return f"{self.user.username} ({'activa' if self.is_active else 'inactiva'})"

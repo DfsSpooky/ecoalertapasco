@@ -1193,3 +1193,149 @@ class LiveEvidenceAndGpsIntegrityTests(TestCase):
         self.assertTrue(ok_res.data['gps_verified'])
 
 
+class SerenazgoNotificationTests(TestCase):
+    def setUp(self):
+        from django.contrib.auth.models import Group
+        self.client = APIClient()
+        self.citizen = User.objects.create_user(username='vecino_push', password='Password123!')
+        self.staff_user = User.objects.create_user(username='fiscal_push', password='Password123!', is_staff=True)
+        self.admin_user = User.objects.create_superuser(username='admin_push', email='admin@pasco.gob.pe', password='Password123!')
+        sereno_group, _ = Group.objects.get_or_create(name='serenazgo')
+        self.sereno = User.objects.create_user(username='sereno_push', password='Password123!')
+        self.sereno.groups.add(sereno_group)
+
+    def test_push_endpoints_require_authority_and_manage_subscriptions(self):
+        # Ciudadano común no puede leer llave VAPID ni suscribirse como autoridad
+        self.client.force_authenticate(user=self.citizen)
+        r_cit = self.client.get('/api/push/vapid-key/')
+        self.assertEqual(r_cit.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Serenazgo sí puede obtener llave VAPID y suscribirse
+        self.client.force_authenticate(user=self.sereno)
+        r_key = self.client.get('/api/push/vapid-key/')
+        self.assertEqual(r_key.status_code, status.HTTP_200_OK)
+        self.assertTrue(len(r_key.data['public_key']) > 30)
+
+        sub_payload = {
+            'subscription': {
+                'endpoint': 'https://fcm.googleapis.com/fcm/send/test-sereno-1',
+                'keys': {'p256dh': 'BTestP256dhKeyValue123456', 'auth': 'AuthSecret123'},
+            },
+            'user_agent': 'Android Chrome PWA',
+        }
+        r_sub = self.client.post('/api/push/subscribe/', sub_payload, format='json')
+        self.assertEqual(r_sub.status_code, status.HTTP_201_CREATED)
+
+        r_list = self.client.get('/api/push/subscribe/')
+        self.assertEqual(r_list.status_code, status.HTTP_200_OK)
+        self.assertEqual(r_list.data['active_subscriptions'], 1)
+
+        r_del = self.client.delete('/api/push/subscribe/', {'endpoint': sub_payload['subscription']['endpoint']}, format='json')
+        self.assertEqual(r_del.status_code, status.HTTP_200_OK)
+        self.assertEqual(r_del.data['deactivated'], 1)
+
+    def test_send_push_targets_serenazgo_and_cleans_410_gone(self):
+        from unittest.mock import MagicMock, patch
+        from pywebpush import WebPushException
+        from .models import PushSubscription
+        from .notifications import send_push_for_alert
+
+        sub_sereno = PushSubscription.objects.create(
+            user=self.sereno,
+            endpoint='https://push.example.com/sereno-active',
+            p256dh='P256Key1',
+            auth='Auth1',
+        )
+        sub_staff = PushSubscription.objects.create(
+            user=self.staff_user,
+            endpoint='https://push.example.com/staff-ambiental',
+            p256dh='P256Key2',
+            auth='Auth2',
+        )
+        sub_gone = PushSubscription.objects.create(
+            user=self.admin_user,
+            endpoint='https://push.example.com/admin-gone',
+            p256dh='P256Key3',
+            auth='Auth3',
+        )
+
+        alert_ciudadana = Alert.objects.create(
+            title='Robo reportado en Chaupimarca',
+            description='Dos sujetos sustrajeron mochila cerca a plaza.',
+            category='seguridad',
+            severity='medio',
+            district='chaupimarca',
+            address='Plaza Carrión',
+            latitude=-10.676,
+            longitude=-76.256,
+            reported_by=self.citizen,
+        )
+
+        def fake_webpush(subscription_info, data, **kwargs):
+            ep = subscription_info['endpoint']
+            if ep == sub_gone.endpoint:
+                resp = MagicMock(status_code=410)
+                raise WebPushException('Gone', response=resp)
+            return MagicMock(status_code=201)
+
+        with patch('alerts.notifications.webpush', side_effect=fake_webpush) as mock_wp:
+            sent = send_push_for_alert(alert_ciudadana.id)
+
+        # Debe enviar a Serenazgo y Admin (ciudadana), NO a staff ambiental puro
+        self.assertEqual(sent, 1)
+        called_endpoints = {c.kwargs['subscription_info']['endpoint'] for c in mock_wp.call_args_list}
+        self.assertIn(sub_sereno.endpoint, called_endpoints)
+        self.assertIn(sub_gone.endpoint, called_endpoints)
+        self.assertNotIn(sub_staff.endpoint, called_endpoints)
+
+        sub_gone.refresh_from_db()
+        self.assertFalse(sub_gone.is_active)
+
+    def test_telegram_alert_and_settings_integration(self):
+        from unittest.mock import MagicMock, patch
+        from .models import SystemConfig
+        from .notifications import send_telegram_for_alert
+
+        SystemConfig.set_value('telegram_enabled', 'true')
+        SystemConfig.set_value('telegram_bot_token', '123456:TEST_BOT_TOKEN')
+        SystemConfig.set_value('telegram_chat_id', '-10099887766')
+        SystemConfig.set_value('public_app_url', 'https://ecoalerta.duckdns.org')
+
+        alert_sec = Alert.objects.create(
+            title='Disturbio <urgente> en Yanacancha',
+            description='Grupo generando desorden & peligro.',
+            category='convivencia',
+            severity='critico',
+            district='yanacancha',
+            address='Av. Daniel Alcides Carrión 150',
+            latitude=-10.665,
+            longitude=-76.252,
+        )
+
+        mock_resp = MagicMock(status_code=200)
+        with patch('alerts.notifications.httpx.post', return_value=mock_resp) as mock_post:
+            ok = send_telegram_for_alert(alert_sec.id)
+
+        self.assertTrue(ok)
+        self.assertEqual(mock_post.call_count, 1)
+        sent_json = mock_post.call_args.kwargs['json']
+        self.assertEqual(sent_json['chat_id'], '-10099887766')
+        self.assertIn('&lt;urgente&gt;', sent_json['text'])
+        self.assertIn('https://maps.google.com/?q=-10.665000,-76.252000', sent_json['text'])
+        self.assertIn(f'https://ecoalerta.duckdns.org/?vista=ciudadana&amp;alert_id={alert_sec.id}', sent_json['text'])
+
+        # Verificar endpoint TestTelegramView y SystemSettingsView
+        self.client.force_authenticate(user=self.admin_user)
+        with patch('alerts.notifications.httpx.post', return_value=mock_resp):
+            r_test = self.client.post('/api/system/test-telegram/', {}, format='json')
+        self.assertEqual(r_test.status_code, status.HTTP_200_OK)
+        self.assertTrue(r_test.data['success'])
+
+        r_get = self.client.get('/api/system/settings/')
+        self.assertEqual(r_get.status_code, status.HTTP_200_OK)
+        self.assertTrue(r_get.data['telegram_enabled'])
+        self.assertTrue(r_get.data['has_telegram_token'])
+        self.assertEqual(r_get.data['telegram_chat_id'], '-10099887766')
+
+
+

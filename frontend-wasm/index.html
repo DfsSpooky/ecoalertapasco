@@ -2152,23 +2152,225 @@
     };
 
     window.ecoNotify = {
+      _audioCtx: null,
+      _urlBase64ToUint8Array: function(base64String) {
+        const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const rawData = window.atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        for (let i = 0; i < rawData.length; ++i) {
+          outputArray[i] = rawData.charCodeAt(i);
+        }
+        return outputArray;
+      },
+      _unlockAudio: function() {
+        try {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (!AudioCtx) return null;
+          if (!this._audioCtx) {
+            this._audioCtx = new AudioCtx();
+          }
+          if (this._audioCtx.state === 'suspended') {
+            this._audioCtx.resume().catch(() => {});
+          }
+          return this._audioCtx;
+        } catch (e) {
+          return null;
+        }
+      },
+      playSiren: function(severity) {
+        const ctx = this._unlockAudio();
+        if (!ctx) return;
+        try {
+          const now = ctx.currentTime;
+          const isUrgent = severity === 'critico' || severity === 'ciudadana';
+          const freqs = isUrgent ? [880, 1174.66, 880, 1174.66] : [659.25, 880];
+          const stepDur = isUrgent ? 0.14 : 0.16;
+
+          freqs.forEach((freq, idx) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = isUrgent ? 'triangle' : 'sine';
+            osc.frequency.setValueAtTime(freq, now + idx * stepDur);
+            gain.gain.setValueAtTime(0.001, now + idx * stepDur);
+            gain.gain.exponentialRampToValueAtTime(0.18, now + idx * stepDur + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + (idx + 1) * stepDur);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now + idx * stepDur);
+            osc.stop(now + (idx + 1) * stepDur + 0.01);
+          });
+        } catch (e) {
+          console.warn('playSiren error:', e);
+        }
+      },
+      vibrate: function() {
+        try {
+          if (navigator.vibrate) {
+            navigator.vibrate([250, 100, 250, 100, 350]);
+          }
+        } catch (e) {}
+      },
       requestPermission: async function() {
         if (!('Notification' in window)) return false;
         const p = await Notification.requestPermission();
         return p === 'granted';
       },
-      sendNotification: function(title, body, icon) {
+      sendNotification: async function(title, body, icon, url, alertId) {
         if (!('Notification' in window) || Notification.permission !== 'granted') return;
+        const targetUrl = url || '/';
+        const opts = {
+          body: body,
+          icon: icon || 'https://img.icons8.com/color/192/leaf.png',
+          badge: 'https://img.icons8.com/color/192/leaf.png',
+          vibrate: [250, 100, 250],
+          tag: alertId ? `ecoalerta-local-${alertId}` : 'ecoalerta-local',
+          renotify: true,
+          data: { url: targetUrl, alert_id: alertId || '' }
+        };
         try {
-          new Notification(title, {
-            body: body,
-            icon: icon || 'https://img.icons8.com/color/192/leaf.png'
-          });
+          if ('serviceWorker' in navigator) {
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg && reg.showNotification) {
+              await reg.showNotification(title, opts);
+              return;
+            }
+          }
+          const n = new Notification(title, opts);
+          n.onclick = function() {
+            try { window.focus(); } catch (e) {}
+            if (alertId) {
+              window.dispatchEvent(new CustomEvent('eco-open-alert', { detail: { alert_id: String(alertId) } }));
+            }
+            n.close();
+          };
         } catch(e) {
           console.warn("Notification error:", e);
         }
+      },
+      getPushState: async function() {
+        const supported = ('Notification' in window) && ('serviceWorker' in navigator) && ('PushManager' in window);
+        const permission = ('Notification' in window) ? Notification.permission : 'unsupported';
+        const isStandalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || (window.navigator.standalone === true);
+        let subscribed = false;
+        if (supported && permission === 'granted') {
+          try {
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.getSubscription();
+            subscribed = !!sub;
+          } catch (e) {}
+        }
+        return JSON.stringify({
+          supported: supported,
+          permission: permission,
+          subscribed: subscribed,
+          is_standalone: isStandalone
+        });
+      },
+      subscribePush: async function(apiBase, token) {
+        try {
+          if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+            return JSON.stringify({ ok: false, error: 'Este navegador no soporta Web Push. En iPhone, instala la app con "Agregar a pantalla de inicio" primero.' });
+          }
+          let perm = Notification.permission;
+          if (perm === 'default') {
+            perm = await Notification.requestPermission();
+          }
+          if (perm !== 'granted') {
+            return JSON.stringify({ ok: false, error: 'Permiso de notificaciones bloqueado en el navegador. Habilítalo en la configuración del sitio.' });
+          }
+
+          const keyResp = await fetch(apiBase + '/api/push/vapid-key/', {
+            headers: { 'Authorization': 'Token ' + token }
+          });
+          if (!keyResp.ok) {
+            const errText = await keyResp.text();
+            return JSON.stringify({ ok: false, error: 'No se pudo obtener llave VAPID (' + keyResp.status + '): ' + errText });
+          }
+          const keyJson = await keyResp.json();
+          const publicKey = keyJson.public_key;
+          if (!publicKey) {
+            return JSON.stringify({ ok: false, error: 'El servidor no devolvió llave pública VAPID.' });
+          }
+
+          const reg = await navigator.serviceWorker.ready;
+          let sub = await reg.pushManager.getSubscription();
+          if (!sub) {
+            sub = await reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: this._urlBase64ToUint8Array(publicKey)
+            });
+          }
+
+          const saveResp = await fetch(apiBase + '/api/push/subscribe/', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Token ' + token
+            },
+            body: JSON.stringify({
+              subscription: sub.toJSON(),
+              user_agent: navigator.userAgent || '',
+              notify_ciudadana: true,
+              notify_ambiental: true
+            })
+          });
+          if (!saveResp.ok) {
+            const errSave = await saveResp.text();
+            return JSON.stringify({ ok: false, error: 'Error guardando suscripción (' + saveResp.status + '): ' + errSave });
+          }
+          this._unlockAudio();
+          return JSON.stringify({ ok: true, message: 'Notificaciones Push activadas en este dispositivo.' });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: 'Error activando Push: ' + (e && e.message ? e.message : String(e)) });
+        }
+      },
+      unsubscribePush: async function(apiBase, token) {
+        try {
+          if (!('serviceWorker' in navigator)) {
+            return JSON.stringify({ ok: true });
+          }
+          const reg = await navigator.serviceWorker.ready;
+          const sub = await reg.pushManager.getSubscription();
+          if (sub) {
+            await fetch(apiBase + '/api/push/subscribe/', {
+              method: 'DELETE',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Token ' + token
+              },
+              body: JSON.stringify({ endpoint: sub.endpoint })
+            }).catch(() => {});
+            await sub.unsubscribe();
+          }
+          return JSON.stringify({ ok: true, message: 'Notificaciones Push desactivadas en este dispositivo.' });
+        } catch (e) {
+          return JSON.stringify({ ok: false, error: String(e) });
+        }
       }
     };
+
+    // Desbloquear AudioContext en primera interacción del usuario (requisito de navegadores modernos)
+    ['pointerdown', 'keydown'].forEach(evt => {
+      window.addEventListener(evt, () => {
+        if (window.ecoNotify) window.ecoNotify._unlockAudio();
+      }, { once: true, passive: true });
+    });
+
+    // Escuchar mensajes del Service Worker cuando el sereno toca una notificación push
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', event => {
+        if (event.data && event.data.type === 'OPEN_ALERT' && event.data.alert_id) {
+          window.__ECOALERTA_PENDING_OPEN_ALERT__ = String(event.data.alert_id);
+          window.dispatchEvent(new CustomEvent('eco-open-alert', {
+            detail: {
+              alert_id: String(event.data.alert_id),
+              domain: event.data.domain || ''
+            }
+          }));
+        }
+      });
+    }
 
     window.ecoOffline = {
       saveDraft: function(draft) {

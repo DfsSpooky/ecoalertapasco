@@ -1,17 +1,24 @@
 use leptos::*;
-use crate::models::EcoAlert;
+use crate::models::{AlertDomain, EcoAlert};
 
 #[component]
 pub fn EmergencyBanner(
     active_emergency: RwSignal<Option<EcoAlert>>,
     inspection_target: RwSignal<Option<EcoAlert>>,
     selected_alert_id: RwSignal<Option<String>>,
+    active_domain: RwSignal<AlertDomain>,
+    show_authority_dashboard: RwSignal<bool>,
 ) -> impl IntoView {
     let fly_to_emergency = move |a: &EcoAlert| {
         let lat = a.latitude;
         let lng = a.longitude;
+        let dom = a.category.domain();
+        if active_domain.get_untracked() != dom {
+            active_domain.set(dom);
+        }
+        show_authority_dashboard.set(false);
         selected_alert_id.set(Some(a.id.clone()));
-        let _ = js_sys::eval(&format!("window.ecoMap.flyTo({}, {}, 16.5);", lat, lng));
+        let _ = js_sys::eval(&format!("if (window.ecoMap && window.ecoMap.flyTo) window.ecoMap.flyTo({}, {}, 16.5);", lat, lng));
     };
 
     view! {
@@ -19,6 +26,12 @@ pub fn EmergencyBanner(
             let a = alert.clone();
             let title = alert.title.clone();
             let addr = alert.address.clone();
+            let is_ciudadana = alert.is_citizen_security();
+            let badge_text = if is_ciudadana {
+                "🚨 Denuncia Serenazgo"
+            } else {
+                "Alerta Roja Inmediata"
+            };
             let a_for_acta = alert.clone();
 
             view! {
@@ -26,12 +39,12 @@ pub fn EmergencyBanner(
                     <div class="bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white rounded-2xl p-3 sm:p-4 shadow-[0_12px_36px_rgba(220,38,38,0.4)] border-2 border-white/80 flex items-center justify-between gap-3">
                         <div class="flex items-center space-x-3 min-w-0">
                             <div class="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center text-xl shrink-0 animate-bounce">
-                                "🚨"
+                                {if is_ciudadana { "🛡️" } else { "🚨" }}
                             </div>
                             <div class="min-w-0">
                                 <div class="flex items-center space-x-2">
                                     <span class="px-2 py-0.5 rounded-md bg-white/30 text-[9px] font-black uppercase tracking-wider font-mono">
-                                        "Alerta Roja Inmediata"
+                                        {badge_text}
                                     </span>
                                     <span class="text-[10px] text-white/80 truncate">
                                         "Cerro de Pasco"
