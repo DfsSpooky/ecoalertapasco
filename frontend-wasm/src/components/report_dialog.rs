@@ -712,74 +712,114 @@ pub fn ReportDialog(
                             on:change=upload_camera_photo
                         />
 
-                        // Visor modal nativo <dialog> para Cámara en Vivo (getUserMedia, sin galería)
+                        // Visor modal nativo <dialog> estilo Google Pixel Camera / Lens (sin galería)
                         <dialog
                             id="live-camera-dialog"
                             aria-labelledby="live-camera-title"
-                            class="m-auto w-[calc(100vw-1.5rem)] max-w-md rounded-3xl bg-slate-950 text-white p-0 border border-white/15 shadow-2xl overflow-hidden"
+                            class="fixed inset-0 m-0 w-screen h-[100dvh] max-w-none max-h-none rounded-none sm:m-auto sm:w-full sm:max-w-[440px] sm:h-[88dvh] sm:max-h-[760px] sm:rounded-[28px] bg-[#111214] text-[#E3E3E3] p-0 border-0 sm:border sm:border-white/10 shadow-2xl overflow-hidden open:flex open:flex-col"
                         >
-                            <div class="px-4 py-3 flex items-center justify-between border-b border-white/10 bg-slate-900/95">
-                                <div class="flex items-center space-x-2 min-w-0">
-                                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
-                                    <h1 id="live-camera-title" class="text-sm font-bold text-white truncate">
-                                        "Cámara en Vivo · Evidencia Real"
-                                    </h1>
-                                </div>
-                                <button
-                                    type="button"
-                                    aria-label="Cerrar cámara en vivo"
-                                    class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer"
-                                    on:click=move |_| {
-                                        let _ = js_sys::eval("if (window.ecoCamera) window.ecoCamera.close('live-camera-dialog');");
-                                    }
-                                >
-                                    <i class="fa-solid fa-xmark text-xs"></i>
-                                </button>
-                            </div>
-                            <div class="relative bg-black aspect-[4/3] w-full flex items-center justify-center overflow-hidden">
+                            // Viewfinder edge-to-edge a pantalla completa
+                            <div class="relative flex-1 min-h-0 w-full bg-black overflow-hidden">
                                 <video
                                     id="live-camera-video"
                                     autoplay
                                     playsinline
                                     muted
-                                    class="w-full h-full object-cover"
+                                    class="absolute inset-0 w-full h-full object-cover"
                                 ></video>
-                                <div class="pointer-events-none absolute inset-3 border border-white/25 rounded-2xl"></div>
-                            </div>
-                            <div class="p-4 bg-slate-900 space-y-3">
-                                <p class="text-[11px] text-slate-300 text-center leading-snug">
-                                    "Captura directamente el incidente. La cámara se apaga al instante tras tomar la foto."
-                                </p>
-                                <div class="flex items-center justify-between gap-2.5">
+
+                                // Top translucent Google Camera header overlaid on viewfinder
+                                <div class="absolute top-0 inset-x-0 z-10 px-4 pt-4 pb-8 bg-gradient-to-b from-black/75 via-black/35 to-transparent flex items-center justify-between">
+                                    <div class="inline-flex items-center space-x-2 px-3 py-1.5 rounded-full bg-black/50 backdrop-blur-md border border-white/15 min-w-0">
+                                        // Google Lens / Camera style static SVG icon (no blinking dot)
+                                        <svg class="w-4 h-4 text-[#8AB4F8] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+                                            <circle cx="12" cy="13" r="3.5"/>
+                                        </svg>
+                                        <h1 id="live-camera-title" class="text-[13px] font-medium tracking-tight text-white truncate">
+                                            "Cámara en Vivo"
+                                        </h1>
+                                    </div>
                                     <button
                                         type="button"
-                                        class="px-3 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer"
-                                        on:click=move |_| {
-                                            let _ = js_sys::eval("if (window.ecoCamera) window.ecoCamera.switchCamera('live-camera-dialog', 'live-camera-video');");
-                                        }
-                                    >
-                                        <i class="fa-solid fa-camera-rotate text-xs"></i>
-                                        <span>"Voltear"</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        autofocus
-                                        class="flex-1 py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] text-slate-950 font-bold text-xs flex items-center justify-center space-x-2 shadow-md transition cursor-pointer"
-                                        disabled=move || is_uploading_photo.get()
-                                        on:click=capture_live_photo
-                                    >
-                                        <i class="fa-solid fa-camera text-sm"></i>
-                                        <span>"Capturar Evidencia"</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class="px-3 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 text-xs font-semibold transition cursor-pointer"
+                                        aria-label="Cerrar cámara en vivo"
+                                        class="w-10 h-10 rounded-full bg-black/50 hover:bg-white/20 backdrop-blur-md border border-white/15 text-white flex items-center justify-center transition cursor-pointer"
                                         on:click=move |_| {
                                             let _ = js_sys::eval("if (window.ecoCamera) window.ecoCamera.close('live-camera-dialog');");
                                         }
                                     >
-                                        "Cancelar"
+                                        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M18 6 6 18"/>
+                                            <path d="m6 6 12 12"/>
+                                        </svg>
                                     </button>
+                                </div>
+
+                                // Google Lens style subtle corner framing brackets
+                                <div class="pointer-events-none absolute inset-6 sm:inset-7">
+                                    <div class="absolute top-0 left-0 w-7 h-7 border-t-2 border-l-2 border-white/70 rounded-tl-xl"></div>
+                                    <div class="absolute top-0 right-0 w-7 h-7 border-t-2 border-r-2 border-white/70 rounded-tr-xl"></div>
+                                    <div class="absolute bottom-0 left-0 w-7 h-7 border-b-2 border-l-2 border-white/70 rounded-bl-xl"></div>
+                                    <div class="absolute bottom-0 right-0 w-7 h-7 border-b-2 border-r-2 border-white/70 rounded-br-xl"></div>
+                                </div>
+                            </div>
+
+                            // Bottom Google Pixel Camera control bar
+                            <div class="shrink-0 bg-[#111214] px-6 pt-3.5 pb-6 sm:pb-5 border-t border-white/10 space-y-3.5">
+                                <p class="text-[11px] text-[#C4C7C5] text-center font-normal tracking-wide">
+                                    "Encuadra el incidente · Captura directa sin galería"
+                                </p>
+                                <div class="grid grid-cols-3 items-center">
+                                    <div class="flex justify-start">
+                                        <button
+                                            type="button"
+                                            aria-label="Cancelar"
+                                            title="Cancelar"
+                                            class="w-12 h-12 rounded-full bg-[#282A2C] hover:bg-[#35373A] active:scale-95 text-[#E3E3E3] flex items-center justify-center transition cursor-pointer"
+                                            on:click=move |_| {
+                                                let _ = js_sys::eval("if (window.ecoCamera) window.ecoCamera.close('live-camera-dialog');");
+                                            }
+                                        >
+                                            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                <path d="M19 12H5"/>
+                                                <path d="m12 19-7-7 7-7"/>
+                                            </svg>
+                                        </button>
+                                    </div>
+
+                                    <div class="flex justify-center">
+                                        <button
+                                            type="button"
+                                            autofocus
+                                            aria-label="Capturar fotografía"
+                                            title="Tomar foto"
+                                            class="w-[72px] h-[72px] rounded-full border-[3.5px] border-white p-[4px] bg-transparent hover:border-[#A8C7FA] active:scale-95 transition cursor-pointer disabled:opacity-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-[#8AB4F8]/50"
+                                            disabled=move || is_uploading_photo.get()
+                                            on:click=capture_live_photo
+                                        >
+                                            <span class="block w-full h-full rounded-full bg-white shadow-inner"></span>
+                                        </button>
+                                    </div>
+
+                                    <div class="flex justify-end">
+                                        <button
+                                            type="button"
+                                            aria-label="Cambiar cámara"
+                                            title="Cambiar cámara frontal / trasera"
+                                            class="w-12 h-12 rounded-full bg-[#282A2C] hover:bg-[#35373A] active:scale-95 text-[#E3E3E3] flex items-center justify-center transition cursor-pointer"
+                                            on:click=move |_| {
+                                                let _ = js_sys::eval("if (window.ecoCamera) window.ecoCamera.switchCamera('live-camera-dialog', 'live-camera-video');");
+                                            }
+                                        >
+                                            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                <path d="M11 19H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>
+                                                <path d="M13 5h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5"/>
+                                                <circle cx="12" cy="12" r="3"/>
+                                                <path d="m18 22-3-3 3-3"/>
+                                                <path d="m6 2 3 3-3 3"/>
+                                            </svg>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </dialog>
@@ -986,18 +1026,23 @@ pub fn ReportDialog(
                                                 type="button"
                                                 disabled=move || is_uploading_photo.get() || is_analyzing_ai.get() || is_camera_starting.get()
                                                 on:click=open_cam
-                                                class="col-span-2 py-5 px-4 rounded-2xl border-2 border-emerald-300 hover:border-emerald-500 bg-gradient-to-b from-emerald-50/85 to-white text-slate-800 flex flex-col items-center justify-center space-y-2 transition active:scale-[0.99] cursor-pointer shadow-xs group select-none text-center disabled:opacity-50"
+                                                class="col-span-2 py-5 px-4 rounded-2xl border border-[#D3E3FD] hover:border-[#8AB4F8] bg-gradient-to-b from-[#F8FAFD] to-white text-slate-800 flex flex-col items-center justify-center space-y-2.5 transition active:scale-[0.99] cursor-pointer shadow-xs group select-none text-center disabled:opacity-50"
                                             >
-                                                <div class="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition">
+                                                <div class="w-12 h-12 rounded-2xl bg-[#E8F0FE] text-[#1A73E8] border border-[#D2E3FC] flex items-center justify-center shadow-2xs group-hover:scale-105 transition">
                                                     {move || if is_camera_starting.get() {
-                                                        view! { <span class="inline-block w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span> }.into_view()
+                                                        view! { <span class="inline-block w-5 h-5 border-2 border-[#1A73E8]/30 border-t-[#1A73E8] rounded-full animate-spin"></span> }.into_view()
                                                     } else {
-                                                        view! { <i class="fa-solid fa-camera text-lg"></i> }.into_view()
+                                                        view! {
+                                                            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                                                                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+                                                                <circle cx="12" cy="13" r="3.5"/>
+                                                            </svg>
+                                                        }.into_view()
                                                     }}
                                                 </div>
                                                 <div>
-                                                    <span class="block font-bold text-xs sm:text-sm text-slate-900 leading-tight">"Tomar Foto en Vivo (Cámara)"</span>
-                                                    <span class="block text-[10px] text-emerald-700 font-semibold mt-0.5">"Captura directa del celular · Sin galería"</span>
+                                                    <span class="block font-semibold text-xs sm:text-sm text-[#1F1F1F] leading-tight">"Abrir Cámara en Vivo"</span>
+                                                    <span class="block text-[10.5px] text-[#1A73E8] font-medium mt-0.5">"Captura directa del celular · Sin galería"</span>
                                                 </div>
                                             </button>
                                         }.into_view()
@@ -1005,12 +1050,12 @@ pub fn ReportDialog(
                                 } else if photos.get().len() == 1 {
                                     let open_cam = open_live_camera.clone();
                                     view! {
-                                        <div class="aspect-square w-full rounded-2xl border-2 border-dashed border-emerald-300 bg-emerald-50/30 p-3 flex flex-col justify-center items-center text-center shadow-2xs">
+                                        <div class="aspect-square w-full rounded-2xl border border-dashed border-[#A8C7FA] bg-[#F8FAFD] p-2.5 flex flex-col justify-center items-center text-center shadow-2xs">
                                             {move || if is_uploading_photo.get() {
                                                 view! {
                                                     <div class="h-full flex flex-col items-center justify-center space-y-1">
-                                                        <span class="inline-block w-5 h-5 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></span>
-                                                        <span class="font-bold text-purple-700 text-[11px] mt-1">"Subiendo..."</span>
+                                                        <span class="inline-block w-5 h-5 border-2 border-[#1A73E8] border-t-transparent rounded-full animate-spin"></span>
+                                                        <span class="font-semibold text-[#1A73E8] text-[11px] mt-1">"Subiendo..."</span>
                                                     </div>
                                                 }.into_view()
                                             } else {
@@ -1020,14 +1065,17 @@ pub fn ReportDialog(
                                                         type="button"
                                                         disabled=move || is_uploading_photo.get() || is_analyzing_ai.get() || is_camera_starting.get()
                                                         on:click=open_cam_inner
-                                                        class="w-full h-full rounded-xl bg-white hover:bg-emerald-50 border border-emerald-200 text-emerald-800 flex flex-col items-center justify-center space-y-1.5 transition active:scale-95 cursor-pointer shadow-2xs p-2"
+                                                        class="w-full h-full rounded-xl bg-white hover:bg-[#F8FAFD] border border-[#D3E3FD] text-[#1A73E8] flex flex-col items-center justify-center space-y-1.5 transition active:scale-95 cursor-pointer shadow-2xs p-2"
                                                         title="Tomar segunda foto en vivo"
                                                     >
-                                                        <div class="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
-                                                            <i class="fa-solid fa-camera text-sm"></i>
+                                                        <div class="w-9 h-9 rounded-xl bg-[#E8F0FE] text-[#1A73E8] flex items-center justify-center">
+                                                            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+                                                                <circle cx="12" cy="13" r="3.5"/>
+                                                            </svg>
                                                         </div>
-                                                        <span class="text-[11px] font-bold text-slate-800">"+ 2da Foto en Vivo"</span>
-                                                        <span class="text-[9px] text-emerald-700 font-semibold">"Otro ángulo"</span>
+                                                        <span class="text-[11px] font-semibold text-[#1F1F1F]">"+ 2da Foto en Vivo"</span>
+                                                        <span class="text-[9.5px] text-[#1A73E8] font-medium">"Otro ángulo"</span>
                                                     </button>
                                                 }.into_view()
                                             }}

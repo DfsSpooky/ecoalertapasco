@@ -1346,11 +1346,13 @@
 
         let stream;
         try {
+          const isPortrait = window.innerHeight > window.innerWidth;
           stream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: { ideal: this._facingMode },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 }
+              width: { ideal: isPortrait ? 1200 : 1600 },
+              height: { ideal: isPortrait ? 1600 : 1200 },
+              aspectRatio: { ideal: isPortrait ? 0.75 : 1.3333 }
             },
             audio: false
           });
@@ -1366,6 +1368,7 @@
         }
 
         this._stream = stream;
+        video.style.transform = this._facingMode === "user" ? "scaleX(-1)" : "none";
         video.srcObject = stream;
         await video.play().catch(() => {});
         return true;
@@ -1399,6 +1402,10 @@
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext("2d");
+        if (this._facingMode === "user") {
+          ctx.translate(width, 0);
+          ctx.scale(-1, 1);
+        }
         ctx.drawImage(video, 0, 0, width, height);
 
         const blob = await new Promise((resolve, reject) => {
