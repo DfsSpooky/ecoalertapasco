@@ -69,6 +69,119 @@ def _resolve_private_evidence_path(raw_url_or_name: str) -> str | None:
     return target
 
 
+MAX_AMBIENTAL_GPS_DISTANCE_METERS = 300.0
+MAX_CIUDADANA_GPS_DISTANCE_METERS = 1000.0
+GPS_VERIFIED_THRESHOLD_METERS = 300.0
+PHASH_DUPLICATE_MAX_HAMMING = 6
+ALLOWED_CAPTURE_SOURCES = {'live_camera', 'camera_input', 'authority', 'gallery', ''}
+
+
+def _extract_evidence_key(img_ref: str) -> str:
+    """Extrae el nombre de archivo normalizado de una URL o ruta de evidencia."""
+    raw = str(img_ref or '').strip().split('?')[0]
+    if 'uploads/' in raw:
+        return os.path.basename(raw.split('uploads/')[-1])
+    return os.path.basename(raw)
+
+
+def _compute_dhash_from_pil(img: Image.Image) -> str:
+    """
+    Calcula un hash perceptual dHash de 64 bits (16 hex) resistente a recortes leves,
+    recompresión o reescalado. Retorna '' si la imagen es uniforme/sin contraste.
+    """
+    gray = img.convert('L').resize((9, 8), Image.Resampling.LANCZOS)
+    pixels = list(gray.getdata())
+    if not pixels or (max(pixels) - min(pixels)) < 8 or len(set(pixels)) < 4:
+        return ''
+    bits = 0
+    for row in range(8):
+        row_offset = row * 9
+        for col in range(8):
+            left = pixels[row_offset + col]
+            right = pixels[row_offset + col + 1]
+            bits = (bits << 1) | (1 if left > right else 0)
+    return f"{bits:016x}"
+
+
+def _compute_fingerprints_from_bytes(image_bytes: bytes) -> tuple[str, str]:
+    """Calcula SHA-256 exacto y dHash perceptual a partir de los bytes de imagen."""
+    sha256_hex = hashlib.sha256(image_bytes).hexdigest()
+    phash_hex = ''
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img = ImageOps.exif_transpose(img)
+            phash_hex = _compute_dhash_from_pil(img)
+    except Exception:
+        phash_hex = ''
+    return sha256_hex, phash_hex
+
+
+def _hamming_distance_hex(h1: str, h2: str) -> int:
+    """Distancia de Hamming entre dos hashes hexadecimales de 64 bits."""
+    if not h1 or not h2 or len(h1) != len(h2):
+        return 64
+    return (int(h1, 16) ^ int(h2, 16)).bit_count()
+
+
+def _resolve_local_evidence_bytes(img_ref: str) -> bytes | None:
+    """Lee bytes de una evidencia local (privada o MEDIA_ROOT/uploads) si existe."""
+    if not img_ref:
+        return None
+    s = str(img_ref).strip()
+    if '/evidence/private/' in s:
+        p = _resolve_private_evidence_path(s)
+        if p and os.path.exists(p):
+            with open(p, 'rb') as f:
+                return f.read()
+    clean_name = _extract_evidence_key(s)
+    if clean_name and not clean_name.startswith('.'):
+        uploads_base = os.path.abspath(os.path.join(settings.MEDIA_ROOT, 'uploads'))
+        candidate = os.path.abspath(os.path.join(uploads_base, clean_name))
+        if candidate.startswith(uploads_base + os.sep) and os.path.exists(candidate):
+            with open(candidate, 'rb') as f:
+                return f.read()
+    return None
+
+
+def _resolve_evidence_metadata(img_ref: str) -> dict:
+    """Obtiene sha256, phash y capture_source desde caché o calculándolos del archivo local."""
+    key = _extract_evidence_key(img_ref)
+    cached = cache.get(f"upload_meta_{key}") if key else None
+    if isinstance(cached, dict) and cached.get('sha256'):
+        return cached
+    raw_bytes = _resolve_local_evidence_bytes(img_ref)
+    if raw_bytes:
+        sha256_hex, phash_hex = _compute_fingerprints_from_bytes(raw_bytes)
+        return {'sha256': sha256_hex, 'phash': phash_hex, 'capture_source': ''}
+    return {'sha256': '', 'phash': '', 'capture_source': ''}
+
+
+def _find_duplicate_evidence_alert(sha256: str, phash: str, exclude_id=None):
+    """
+    Busca si una fotografía idéntica (SHA-256) o visualmente equivalente (dHash <= 6 bits)
+    ya fue registrada en otra alerta previa.
+    """
+    if not sha256 and not phash:
+        return None
+    qs = Alert.objects.all()
+    if exclude_id is not None:
+        qs = qs.exclude(pk=exclude_id)
+    if sha256:
+        exact = qs.filter(Q(evidence_sha256_1=sha256) | Q(evidence_sha256_2=sha256)).first()
+        if exact:
+            return exact
+    if phash and len(phash) == 16:
+        candidates = qs.filter(
+            Q(evidence_phash_1__gt='') | Q(evidence_phash_2__gt='')
+        ).values_list('id', 'title', 'evidence_phash_1', 'evidence_phash_2')
+        for aid, atitle, p1, p2 in candidates:
+            if p1 and _hamming_distance_hex(phash, p1) <= PHASH_DUPLICATE_MAX_HAMMING:
+                return Alert(id=aid, title=atitle)
+            if p2 and _hamming_distance_hex(phash, p2) <= PHASH_DUPLICATE_MAX_HAMMING:
+                return Alert(id=aid, title=atitle)
+    return None
+
+
 class IsAlertAuthority(permissions.BasePermission):
     """Permite acciones de gestión a personal ambiental (is_staff), Serenazgo o superadmin."""
 
@@ -157,6 +270,8 @@ def compute_sync_etag(user) -> tuple[str, set[int]]:
             'resolution_image_url',
             'title',
             'resolution_comment',
+            'gps_verified',
+            'capture_source',
         )
     )
     for row in alert_rows:
@@ -350,12 +465,91 @@ class AlertViewSet(viewsets.ModelViewSet):
                         'detail': f"Ya existe un reporte similar en esta zona ('{existing.title}'). Evitemos duplicar incidentes."
                     })
 
-        # 3. Validación de evidencia fotográfica según dominio
+        # 3. Validación de evidencia fotográfica, unicidad (SHA-256 + dHash) y ubicación GPS según dominio
+        is_authority = can_manage_domain(user, domain)
         img1 = serializer.validated_data.get('image_url')
         img2 = serializer.validated_data.get('image_url_2')
-        for img in [img1, img2]:
+        reporter_lat = serializer.validated_data.get('reporter_latitude')
+        reporter_lng = serializer.validated_data.get('reporter_longitude')
+
+        if domain == 'ambiental' and not is_authority and not img1 and not img2:
+            raise ValidationError({
+                'detail': 'Debes capturar al menos una fotografía en vivo con la cámara de tu dispositivo para registrar un incidente ambiental.'
+            })
+
+        gps_verified = False
+        gps_distance_m = None
+        if reporter_lat is not None and reporter_lng is not None:
+            if (
+                math.isnan(reporter_lat)
+                or math.isnan(reporter_lng)
+                or math.isinf(reporter_lat)
+                or math.isinf(reporter_lng)
+                or not (-90.0 <= reporter_lat <= 90.0)
+                or not (-180.0 <= reporter_lng <= 180.0)
+            ):
+                raise ValidationError({'detail': 'Coordenadas GPS del dispositivo inválidas.'})
+            if new_lat is not None and new_lng is not None:
+                gps_distance_m = round(
+                    calculate_distance_meters(reporter_lat, reporter_lng, new_lat, new_lng), 1
+                )
+                if not is_authority:
+                    max_allowed_m = (
+                        MAX_AMBIENTAL_GPS_DISTANCE_METERS
+                        if domain == 'ambiental'
+                        else MAX_CIUDADANA_GPS_DISTANCE_METERS
+                    )
+                    if gps_distance_m > max_allowed_m:
+                        raise ValidationError({
+                            'detail': (
+                                f'Tu ubicación GPS actual está a {int(gps_distance_m)} metros del punto marcado '
+                                f'(máximo permitido: {int(max_allowed_m)} m). Debes reportar desde el lugar del incidente.'
+                            )
+                        })
+                gps_verified = gps_distance_m <= GPS_VERIFIED_THRESHOLD_METERS
+        elif domain == 'ambiental' and not is_authority:
+            raise ValidationError({
+                'detail': 'Debes activar el GPS de tu dispositivo para verificar que te encuentras en el lugar del incidente ambiental.'
+            })
+
+        meta1 = _resolve_evidence_metadata(img1) if img1 else {'sha256': '', 'phash': '', 'capture_source': ''}
+        meta2 = _resolve_evidence_metadata(img2) if img2 else {'sha256': '', 'phash': '', 'capture_source': ''}
+        resolved_capture_source = (
+            meta1.get('capture_source')
+            or meta2.get('capture_source')
+            or ('authority' if is_authority else '')
+        )
+
+        if not is_authority and 'gallery' in (meta1.get('capture_source'), meta2.get('capture_source')):
+            raise ValidationError({
+                'detail': 'No se permiten imágenes seleccionadas de galería. Toma la fotografía directamente con la cámara.'
+            })
+
+        if img1 and img2:
+            same_sha = bool(meta1['sha256'] and meta1['sha256'] == meta2['sha256'])
+            same_phash = bool(
+                meta1['phash']
+                and meta2['phash']
+                and _hamming_distance_hex(meta1['phash'], meta2['phash']) <= 4
+            )
+            if same_sha or same_phash:
+                raise ValidationError({
+                    'detail': 'Las dos fotografías adjuntas son idénticas. Toma una segunda foto desde otro ángulo o conserva solo una.'
+                })
+
+        for img, meta in ((img1, meta1), (img2, meta2)):
             if not img:
                 continue
+            if not is_authority:
+                dup_alert = _find_duplicate_evidence_alert(meta.get('sha256', ''), meta.get('phash', ''))
+                if dup_alert is not None:
+                    raise ValidationError({
+                        'detail': (
+                            f"Esta fotografía ya fue utilizada en otro reporte ('{dup_alert.title}'). "
+                            "Para evitar duplicados, debes capturar una foto nueva del incidente actual."
+                        )
+                    })
+
             clean_key = img.split('uploads/')[-1] if 'uploads/' in img else os.path.basename(img.strip().split('?')[0])
             if domain == 'ambiental':
                 cached_analysis = cache.get(f"analysis_res_{img.strip()}") or cache.get(f"analysis_res_{clean_key}")
@@ -391,6 +585,13 @@ class AlertViewSet(viewsets.ModelViewSet):
             'reported_by': user if user.is_authenticated else None,
             'domain': domain,
             'history_log': history_log,
+            'evidence_sha256_1': meta1.get('sha256', ''),
+            'evidence_sha256_2': meta2.get('sha256', ''),
+            'evidence_phash_1': meta1.get('phash', ''),
+            'evidence_phash_2': meta2.get('phash', ''),
+            'capture_source': resolved_capture_source,
+            'gps_verified': gps_verified,
+            'gps_distance_meters': gps_distance_m,
         }
         if domain == 'ciudadana':
             extra_kwargs.update({
@@ -1195,12 +1396,27 @@ class ImageUploadView(APIView):
     def post(self, request):
         scope = str(request.data.get('scope') or request.query_params.get('scope') or '').strip().lower()
         private_flag = str(request.data.get('private') or request.query_params.get('private') or '').strip().lower()
+        purpose = str(request.data.get('purpose') or request.query_params.get('purpose') or '').strip().lower()
+        capture_source = str(request.data.get('capture_source') or request.query_params.get('capture_source') or '').strip().lower()[:32]
+        if capture_source not in ALLOWED_CAPTURE_SOURCES:
+            capture_source = ''
         is_private = (scope == 'ciudadana') or (private_flag in ('1', 'true', 'yes'))
+        is_authority = bool(
+            request.user
+            and request.user.is_authenticated
+            and (request.user.is_staff or request.user.is_superuser or is_serenazgo(request.user))
+        )
 
         if is_private and not (request.user and request.user.is_authenticated):
             return Response(
                 {'error': 'Debes iniciar sesión para subir evidencia privada de Serenazgo.'},
                 status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if purpose in ('alert', 'report') and not is_authority and capture_source == 'gallery':
+            return Response(
+                {'error': 'Solo se permiten fotografías tomadas directamente con la cámara del dispositivo.'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         file_obj = request.FILES.get('image')
@@ -1221,6 +1437,21 @@ class ImageUploadView(APIView):
         except Exception:
             return Response({'error': 'El archivo subido no es una imagen válida o está dañado.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        sha256_hex, phash_hex = _compute_fingerprints_from_bytes(webp_bytes)
+
+        if purpose in ('alert', 'report') and not is_authority:
+            dup_alert = _find_duplicate_evidence_alert(sha256_hex, phash_hex)
+            if dup_alert is not None:
+                return Response(
+                    {
+                        'error': (
+                            f"Esta fotografía ya fue utilizada en otro reporte ('{dup_alert.title}'). "
+                            "Por favor toma una foto nueva en el lugar del incidente."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         clean_base = os.path.splitext(os.path.basename(file_obj.name))[0].replace(" ", "_")
         clean_base = re.sub(r'[^\w\-]', '', clean_base) or 'evidencia'
 
@@ -1231,12 +1462,25 @@ class ImageUploadView(APIView):
             with open(target_path, 'wb') as out_f:
                 out_f.write(webp_bytes)
             cache.set(f"private_upload_owner_{target_name}", request.user.id, timeout=3600)
+            saved_key = target_name
             file_url = request.build_absolute_uri(f"/api/evidence/private/{target_name}")
         else:
             target_name = f"{int(timezone.now().timestamp())}_{clean_base}.webp"
             target_path = os.path.join('uploads', target_name)
             file_name = default_storage.save(target_path, ContentFile(webp_bytes))
+            saved_key = os.path.basename(file_name)
             file_url = request.build_absolute_uri(settings.MEDIA_URL + file_name)
+
+        cache.set(
+            f"upload_meta_{saved_key}",
+            {
+                'sha256': sha256_hex,
+                'phash': phash_hex,
+                'capture_source': capture_source,
+                'user_id': request.user.id if request.user and request.user.is_authenticated else None,
+            },
+            timeout=86400,
+        )
 
         orig_kb = round(file_obj.size / 1024, 1)
         webp_kb = round(len(webp_bytes) / 1024, 1)
@@ -1249,6 +1493,9 @@ class ImageUploadView(APIView):
             'original_size_kb': orig_kb,
             'compressed_size_kb': webp_kb,
             'compression_ratio': ratio,
+            'sha256': sha256_hex,
+            'phash': phash_hex,
+            'capture_source': capture_source,
         })
 
 

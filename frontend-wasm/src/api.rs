@@ -136,6 +136,15 @@ pub fn upload_url() -> String {
     format!("{}/api/upload/", api_base_url())
 }
 
+pub fn upload_report_url(is_private: bool) -> String {
+    if is_private {
+        format!("{}/api/upload/?scope=ciudadana&purpose=alert", api_base_url())
+    } else {
+        format!("{}/api/upload/?purpose=alert", api_base_url())
+    }
+}
+
+#[allow(dead_code)]
 pub fn upload_private_url() -> String {
     format!("{}/api/upload/?scope=ciudadana", api_base_url())
 }

@@ -24,6 +24,9 @@ class EcoAlertaTests(TestCase):
             'address': 'Carretera Central, Yanacancha',
             'latitude': -10.6420,
             'longitude': -76.2360,
+            'reporter_latitude': -10.6420,
+            'reporter_longitude': -76.2360,
+            'image_url': 'https://example.com/evidencia_rio.jpg',
         }
 
     def test_alert_creation_requires_login(self):
@@ -992,4 +995,201 @@ class AuthImprovementsTests(TestCase):
             with patch('urllib.request.urlopen', return_value=make_mock_response(payload)):
                 blocked = self.client.post('/api/auth/google/', {'credential': 'fake-jwt-official'}, format='json')
             self.assertEqual(blocked.status_code, status.HTTP_403_FORBIDDEN, f"Expected 403 for {official_email}")
+
+
+class LiveEvidenceAndGpsIntegrityTests(TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.client = APIClient()
+        self.citizen = User.objects.create_user(
+            username='vecino_camara',
+            email='vecino.camara@example.com',
+            password='PasswordSegura123!',
+        )
+        self.other_citizen = User.objects.create_user(
+            username='vecino_camara_2',
+            email='vecino.camara2@example.com',
+            password='PasswordSegura123!',
+        )
+        self.base_env_payload = {
+            'title': 'Botadero clandestino en Yanacancha',
+            'description': 'Acumulación de residuos sólidos junto a la vía.',
+            'category': 'basura',
+            'severity': 'medio',
+            'district': 'yanacancha',
+            'address': 'Av. Los Próceres 400, Yanacancha',
+            'latitude': -10.6520,
+            'longitude': -76.2420,
+            'reporter_latitude': -10.6522,
+            'reporter_longitude': -76.2421,
+        }
+
+    def tearDown(self):
+        from django.core.cache import cache
+        cache.clear()
+
+    def _make_textured_image(self, seed=0, size=(320, 240), crop_margin=0, format_name='JPEG'):
+        import io
+        from PIL import Image, ImageDraw
+        img = Image.new('RGB', size, (30 + seed * 15, 60, 90))
+        draw = ImageDraw.Draw(img)
+        for i in range(0, size[0], 24):
+            color = ((i * 7 + seed * 53) % 255, (i * 11 + seed * 29) % 255, (i * 13 + 80) % 255)
+            draw.rectangle([i, (i * 3 + seed * 20) % (size[1] - 40), i + 20, size[1] - 10], fill=color)
+        draw.ellipse([40 + seed * 10, 30, 180, 170], fill=(220, 180 - seed * 30, 40))
+        if crop_margin > 0:
+            img = img.crop((crop_margin, crop_margin, size[0] - crop_margin, size[1] - crop_margin))
+            img = img.resize((240, 180), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format=format_name, quality=85)
+        return buf.getvalue()
+
+    def test_environmental_alert_requires_photo_and_nearby_gps(self):
+        self.client.force_authenticate(user=self.citizen)
+
+        # 1. Sin foto -> 400
+        no_photo = dict(self.base_env_payload)
+        res_no_photo = self.client.post('/api/alerts/', no_photo, format='json')
+        self.assertEqual(res_no_photo.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('fotografía en vivo', str(res_no_photo.data))
+
+        # Subir foto válida de cámara en vivo
+        img_bytes = self._make_textured_image(seed=1)
+        up_file = SimpleUploadedFile('camara_1.jpg', img_bytes, content_type='image/jpeg')
+        up_res = self.client.post(
+            '/api/upload/?purpose=alert',
+            {'image': up_file, 'capture_source': 'live_camera'},
+            format='multipart',
+        )
+        self.assertEqual(up_res.status_code, status.HTTP_200_OK, up_res.data)
+        self.assertEqual(up_res.data['capture_source'], 'live_camera')
+        self.assertTrue(up_res.data['sha256'])
+        self.assertEqual(len(up_res.data['phash']), 16)
+
+        # 2. Sin GPS del dispositivo -> 400
+        no_gps = dict(self.base_env_payload, image_url=up_res.data['url'])
+        no_gps.pop('reporter_latitude')
+        no_gps.pop('reporter_longitude')
+        res_no_gps = self.client.post('/api/alerts/', no_gps, format='json')
+        self.assertEqual(res_no_gps.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('GPS', str(res_no_gps.data))
+
+        # 3. Con GPS lejano (> 300m) -> 400
+        far_gps = dict(self.base_env_payload, image_url=up_res.data['url'], reporter_latitude=-10.6720)
+        res_far = self.client.post('/api/alerts/', far_gps, format='json')
+        self.assertEqual(res_far.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('metros del punto marcado', str(res_far.data))
+
+        # 4. Con foto en vivo + GPS cercano (< 300m) -> 201 y sin filtrar coords privadas del denunciante
+        ok_payload = dict(self.base_env_payload, image_url=up_res.data['url'])
+        res_ok = self.client.post('/api/alerts/', ok_payload, format='json')
+        self.assertEqual(res_ok.status_code, status.HTTP_201_CREATED, res_ok.data)
+        self.assertTrue(res_ok.data['gps_verified'])
+        self.assertEqual(res_ok.data['capture_source'], 'live_camera')
+        self.assertNotIn('reporter_latitude', res_ok.data)
+        self.assertNotIn('reporter_longitude', res_ok.data)
+        self.assertNotIn('evidence_phash_1', res_ok.data)
+
+    def test_gallery_source_rejected_on_upload_and_create(self):
+        self.client.force_authenticate(user=self.citizen)
+        img_bytes = self._make_textured_image(seed=2)
+        up_file = SimpleUploadedFile('galeria.jpg', img_bytes, content_type='image/jpeg')
+        resp = self.client.post(
+            '/api/upload/?purpose=alert',
+            {'image': up_file, 'capture_source': 'gallery'},
+            format='multipart',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('cámara', str(resp.data))
+
+    def test_duplicate_photo_sha256_and_perceptual_dhash_blocked(self):
+        self.client.force_authenticate(user=self.citizen)
+        img1_bytes = self._make_textured_image(seed=3, size=(400, 300))
+        up1 = self.client.post(
+            '/api/upload/?purpose=alert',
+            {'image': SimpleUploadedFile('foto1.jpg', img1_bytes, content_type='image/jpeg'), 'capture_source': 'live_camera'},
+            format='multipart',
+        )
+        self.assertEqual(up1.status_code, status.HTTP_200_OK)
+
+        p1 = dict(self.base_env_payload, image_url=up1.data['url'])
+        create1 = self.client.post('/api/alerts/', p1, format='json')
+        self.assertEqual(create1.status_code, status.HTTP_201_CREATED)
+
+        # Otro usuario intenta subir la misma foto exacta en otro lugar -> 400 en upload
+        self.client.force_authenticate(user=self.other_citizen)
+        up_dup_exact = self.client.post(
+            '/api/upload/?purpose=alert',
+            {'image': SimpleUploadedFile('foto1_copy.jpg', img1_bytes, content_type='image/jpeg'), 'capture_source': 'live_camera'},
+            format='multipart',
+        )
+        self.assertEqual(up_dup_exact.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('ya fue utilizada', str(up_dup_exact.data))
+
+        # Intento con leve recorte/recompresión/reescalado (dHash perceptual) -> 400 en upload
+        cropped_bytes = self._make_textured_image(seed=3, size=(400, 300), crop_margin=4, format_name='PNG')
+        up_dup_perceptual = self.client.post(
+            '/api/upload/?purpose=alert',
+            {'image': SimpleUploadedFile('foto1_crop.png', cropped_bytes, content_type='image/png'), 'capture_source': 'live_camera'},
+            format='multipart',
+        )
+        self.assertEqual(up_dup_perceptual.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('ya fue utilizada', str(up_dup_perceptual.data))
+
+        # Incluso si se sube sin purpose=alert, perform_create debe bloquear el reporte duplicado
+        up_bypass = self.client.post(
+            '/api/upload/',
+            {'image': SimpleUploadedFile('bypass.png', cropped_bytes, content_type='image/png')},
+            format='multipart',
+        )
+        self.assertEqual(up_bypass.status_code, status.HTTP_200_OK)
+        far_location_payload = dict(
+            self.base_env_payload,
+            title='Otro punto distinto',
+            latitude=-10.6900,
+            longitude=-76.2700,
+            reporter_latitude=-10.6901,
+            reporter_longitude=-76.2701,
+            image_url=up_bypass.data['url'],
+        )
+        blocked_create = self.client.post('/api/alerts/', far_location_payload, format='json')
+        self.assertEqual(blocked_create.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('ya fue utilizada', str(blocked_create.data))
+
+        # Foto genuinamente distinta en otra ubicación -> 201 OK
+        img2_bytes = self._make_textured_image(seed=9, size=(400, 300))
+        up2 = self.client.post(
+            '/api/upload/?purpose=alert',
+            {'image': SimpleUploadedFile('foto2.jpg', img2_bytes, content_type='image/jpeg'), 'capture_source': 'live_camera'},
+            format='multipart',
+        )
+        self.assertEqual(up2.status_code, status.HTTP_200_OK)
+        ok_second = dict(far_location_payload, image_url=up2.data['url'])
+        create2 = self.client.post('/api/alerts/', ok_second, format='json')
+        self.assertEqual(create2.status_code, status.HTTP_201_CREATED, create2.data)
+
+    def test_citizen_security_keeps_photo_optional_but_checks_gps_distance(self):
+        self.client.force_authenticate(user=self.citizen)
+        citizen_payload = {
+            'title': 'Zona sin alumbrado público',
+            'description': 'Poste apagado en esquina oscura.',
+            'category': 'riesgo_urbano',
+            'severity': 'medio',
+            'district': 'chaupimarca',
+            'address': 'Jr. Tarapacá 200',
+            'latitude': -10.6750,
+            'longitude': -76.2555,
+            'reporter_latitude': -10.7100,
+            'reporter_longitude': -76.2900,
+        }
+        far_res = self.client.post('/api/alerts/', citizen_payload, format='json')
+        self.assertEqual(far_res.status_code, status.HTTP_400_BAD_REQUEST)
+
+        citizen_payload['reporter_latitude'] = -10.6752
+        citizen_payload['reporter_longitude'] = -76.2556
+        ok_res = self.client.post('/api/alerts/', citizen_payload, format='json')
+        self.assertEqual(ok_res.status_code, status.HTTP_201_CREATED, ok_res.data)
+        self.assertTrue(ok_res.data['gps_verified'])
+
 

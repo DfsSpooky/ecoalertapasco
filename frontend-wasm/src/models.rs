@@ -262,6 +262,10 @@ pub struct EcoAlert {
     pub resolved_at: Option<String>,
     #[serde(default)]
     pub history_log: Option<String>,
+    #[serde(default)]
+    pub gps_verified: bool,
+    #[serde(default)]
+    pub capture_source: String,
 }
 
 impl EcoAlert {
@@ -426,6 +430,10 @@ pub struct CreateAlertPayload {
     pub image_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_url_2: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reporter_latitude: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reporter_longitude: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

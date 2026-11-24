@@ -280,6 +280,8 @@ pub fn AlertDetail(
 
             let is_citizen_sec = a.is_citizen_security();
             let ttl_badge = if is_citizen_sec { a.remaining_ttl_label() } else { None };
+            let is_gps_verified = a.gps_verified;
+            let is_live_camera = a.capture_source == "live_camera";
             let has_private_ev = a.has_private_evidence;
             let hide_media_pub = a.hide_media_public;
 
@@ -321,6 +323,20 @@ pub fn AlertDetail(
                                     <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200 text-[10.5px] font-semibold">
                                         <span>"⏱️"</span>
                                         <span>{ttl}</span>
+                                    </span>
+                                })}
+
+                                {is_gps_verified.then(|| view! {
+                                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200 text-[10.5px] font-semibold" title="Reportado desde el lugar del incidente con GPS verificado">
+                                        <i class="fa-solid fa-location-dot text-[10px]"></i>
+                                        <span>"GPS Verificado"</span>
+                                    </span>
+                                })}
+
+                                {is_live_camera.then(|| view! {
+                                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200 text-[10.5px] font-semibold" title="Evidencia capturada directamente con cámara en vivo">
+                                        <i class="fa-solid fa-camera text-[10px]"></i>
+                                        <span>"Cámara en vivo"</span>
                                     </span>
                                 })}
 

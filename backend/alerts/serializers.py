@@ -35,10 +35,19 @@ class AlertSerializer(serializers.ModelSerializer):
     image_url_2 = serializers.CharField(
         max_length=500, required=False, allow_blank=True, allow_null=True, validators=[_validate_evidence_ref]
     )
+    reporter_latitude = serializers.FloatField(required=False, allow_null=True, write_only=True)
+    reporter_longitude = serializers.FloatField(required=False, allow_null=True, write_only=True)
 
     class Meta:
         model = Alert
-        exclude = ('confirmed_by',)
+        exclude = (
+            'confirmed_by',
+            'evidence_sha256_1',
+            'evidence_sha256_2',
+            'evidence_phash_1',
+            'evidence_phash_2',
+            'gps_distance_meters',
+        )
         read_only_fields = (
             'created_at',
             'history_log',
@@ -47,6 +56,8 @@ class AlertSerializer(serializers.ModelSerializer):
             'confirmations_count',
             'is_anonymous_public',
             'hide_media_public',
+            'gps_verified',
+            'capture_source',
         )
 
     def get_has_user_confirmed(self, obj):

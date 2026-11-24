@@ -4,9 +4,12 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use crate::api::{
     alerts_url, analyze_evidence_url, fetch_protected_image_blob_url,
-    is_protected_evidence_url, upload_private_url, upload_url,
+    is_protected_evidence_url, upload_report_url,
 };
-use crate::geo::{find_nearby_active_alert, get_browser_gps_position, reverse_geocode};
+use crate::geo::{
+    find_nearby_active_alert, get_browser_gps_position, haversine_distance_meters,
+    reverse_geocode,
+};
 use crate::models::{
     AlertDomain, AuthUser, CreateAlertPayload, EcoAlert, EcoCategory, EcoDistrict, EcoSeverity,
     GeminiAnalysisResponse,
@@ -37,6 +40,11 @@ pub fn ReportDialog(
     let error_message = create_rw_signal(None::<String>);
     let is_geocoding = create_rw_signal(false);
     let is_locating = create_rw_signal(false);
+    let verified_gps = create_rw_signal(None::<(f64, f64)>);
+    let gps_error = create_rw_signal(None::<String>);
+    let camera_error = create_rw_signal(None::<String>);
+    let camera_fallback_mode = create_rw_signal(false);
+    let is_camera_starting = create_rw_signal(false);
 
     // Ajustar categoría por defecto al cambiar de mapa (Ambiental <-> Seguridad Ciudadana)
     create_effect(move |_| {
@@ -231,11 +239,12 @@ pub fn ReportDialog(
         }
     };
 
-    // Synchronize modal state to JS to avoid Leaflet map events during report creation & reverse geocode once
+    // Synchronize modal state to JS to avoid Leaflet map events during report creation, reverse geocode & check real GPS
     create_effect(move |_| {
         let is_open = show_new_report_dialog.get();
         let _ = js_sys::eval(&format!("window.isReportModalOpen = {};", is_open));
         if is_open {
+            camera_error.set(None);
             let (lat, lng) = report_center.get_untracked();
             if address.get_untracked().trim().is_empty() {
                 is_geocoding.set(true);
@@ -246,6 +255,25 @@ pub fn ReportDialog(
                     is_geocoding.set(false);
                 });
             }
+            if verified_gps.get_untracked().is_none() && !is_locating.get_untracked() {
+                is_locating.set(true);
+                gps_error.set(None);
+                spawn_local(async move {
+                    match get_browser_gps_position().await {
+                        Ok((glat, glng)) => {
+                            verified_gps.set(Some((glat, glng)));
+                            gps_error.set(None);
+                            let _ = js_sys::eval(&format!("window.ecoMap.setUserLocation({}, {});", glat, glng));
+                        }
+                        Err(err_msg) => {
+                            gps_error.set(Some(err_msg));
+                        }
+                    }
+                    is_locating.set(false);
+                });
+            }
+        } else {
+            let _ = js_sys::eval("if (window.ecoCamera) { window.ecoCamera.close('live-camera-dialog'); }");
         }
     });
 
@@ -269,39 +297,126 @@ pub fn ReportDialog(
         find_nearby_active_alert(&list, lat, lng, cat, 50.0)
     };
 
-    // Upload photo via JS helper (supports camera vs gallery input)
-    let upload_from_input = {
+    let gps_distance_m = move || -> Option<f64> {
+        let (glat, glng) = verified_gps.get()?;
+        let (clat, clng) = report_center.get();
+        Some(haversine_distance_meters(glat, glng, clat, clng))
+    };
+
+    let gps_check_error = move || -> Option<String> {
+        let dom = active_domain.get();
+        match (dom, gps_distance_m()) {
+            (AlertDomain::Ambiental, None) => Some(
+                gps_error
+                    .get()
+                    .unwrap_or_else(|| "Activa el GPS de tu dispositivo para verificar que estás en el lugar.".to_string()),
+            ),
+            (AlertDomain::Ambiental, Some(d)) if d > 300.0 => Some(format!(
+                "Tu GPS está a {:.0} m del punto marcado (máximo permitido: 300 m).",
+                d
+            )),
+            (AlertDomain::Ciudadana, Some(d)) if d > 1000.0 => Some(format!(
+                "Tu GPS está a {:.0} m del punto marcado (máximo permitido: 1000 m).",
+                d
+            )),
+            _ => None,
+        }
+    };
+
+    let handle_uploaded_photo_url = {
         let photos = photos.clone();
-        let error_message = error_message.clone();
-        let is_uploading_photo = is_uploading_photo.clone();
+        let preview_urls = preview_urls.clone();
         let analyze_photo_with_ai = analyze_photo_with_ai.clone();
 
-        move |input_id: &'static str| {
-            if photos.get().len() >= 2 {
+        move |url_str: String, auth_token: String| {
+            let is_first = photos.get_untracked().is_empty();
+            photos.update(|p| p.push(url_str.clone()));
+            if is_protected_evidence_url(&url_str) && !auth_token.is_empty() {
+                let u_key = url_str.clone();
+                let tok = auth_token;
+                let previews = preview_urls.clone();
+                spawn_local(async move {
+                    if let Ok(blob_url) = fetch_protected_image_blob_url(&u_key, &tok).await {
+                        previews.update(|m| {
+                            m.insert(u_key, blob_url);
+                        });
+                    }
+                });
+            }
+            if is_first {
+                analyze_photo_with_ai(url_str);
+            }
+        }
+    };
+
+    let js_err_msg = |e: wasm_bindgen::JsValue, fallback: &str| -> String {
+        if let Some(err) = e.dyn_ref::<js_sys::Error>() {
+            err.message().into()
+        } else if let Some(s) = e.as_string() {
+            s
+        } else {
+            fallback.to_string()
+        }
+    };
+
+    // Open live camera modal via getUserMedia (falls back to capture="environment" if unavailable)
+    let open_live_camera = {
+        let photos = photos.clone();
+        let error_message = error_message.clone();
+        let camera_error = camera_error.clone();
+        let camera_fallback_mode = camera_fallback_mode.clone();
+        let is_camera_starting = is_camera_starting.clone();
+
+        move |_| {
+            if photos.get_untracked().len() >= 2 {
                 error_message.set(Some("Límite alcanzado: máximo 2 fotografías por reporte.".to_string()));
                 return;
             }
-
-            is_uploading_photo.set(true);
             error_message.set(None);
-
-            let photos = photos.clone();
-            let preview_urls = preview_urls.clone();
-            let error_message = error_message.clone();
-            let is_uploading_photo = is_uploading_photo.clone();
-            let analyze_photo_with_ai = analyze_photo_with_ai.clone();
-            let dom = active_domain.get_untracked();
-            let auth_token = current_user.get_untracked().map(|u| u.token).unwrap_or_default();
+            camera_error.set(None);
+            is_camera_starting.set(true);
 
             spawn_local(async move {
-                let target_upload_url = if dom == AlertDomain::Ciudadana {
-                    upload_private_url()
-                } else {
-                    upload_url()
-                };
+                match js_sys::eval("window.ecoCamera.open('live-camera-dialog', 'live-camera-video')") {
+                    Ok(promise_val) => {
+                        let promise = js_sys::Promise::from(promise_val);
+                        if let Err(e) = JsFuture::from(promise).await {
+                            let msg = js_err_msg(e, "No se pudo abrir la cámara en vivo.");
+                            camera_error.set(Some(msg));
+                            camera_fallback_mode.set(true);
+                        } else {
+                            camera_fallback_mode.set(false);
+                        }
+                    }
+                    Err(e) => {
+                        camera_error.set(Some(format!("No se pudo inicializar cámara: {:?}", e)));
+                        camera_fallback_mode.set(true);
+                    }
+                }
+                is_camera_starting.set(false);
+            });
+        }
+    };
+
+    let capture_live_photo = {
+        let error_message = error_message.clone();
+        let is_uploading_photo = is_uploading_photo.clone();
+        let handle_uploaded = handle_uploaded_photo_url.clone();
+
+        move |_| {
+            is_uploading_photo.set(true);
+            error_message.set(None);
+            let dom = active_domain.get_untracked();
+            let auth_token = current_user.get_untracked().map(|u| u.token).unwrap_or_default();
+            let target_upload_url = upload_report_url(dom == AlertDomain::Ciudadana);
+            let url_js = serde_json::to_string(&target_upload_url).unwrap_or_else(|_| "\"\"".to_string());
+            let tok_js = serde_json::to_string(&auth_token).unwrap_or_else(|_| "\"\"".to_string());
+            let handle_uploaded = handle_uploaded.clone();
+
+            spawn_local(async move {
                 let script = format!(
-                    "window.ecoUpload.uploadFile('{}', '{}', '{}')",
-                    input_id, target_upload_url, auth_token
+                    "window.ecoCamera.captureAndUpload('live-camera-dialog', 'live-camera-video', {}, {})",
+                    url_js, tok_js
                 );
                 match js_sys::eval(&script) {
                     Ok(promise_val) => {
@@ -309,36 +424,65 @@ pub fn ReportDialog(
                         match JsFuture::from(promise).await {
                             Ok(val) => {
                                 if let Some(url_str) = val.as_string() {
-                                    let is_first = photos.get_untracked().is_empty();
-                                    photos.update(|p| p.push(url_str.clone()));
-                                    if is_protected_evidence_url(&url_str) && !auth_token.is_empty() {
-                                        let u_key = url_str.clone();
-                                        let tok = auth_token.clone();
-                                        let previews = preview_urls.clone();
-                                        spawn_local(async move {
-                                            if let Ok(blob_url) = fetch_protected_image_blob_url(&u_key, &tok).await {
-                                                previews.update(|m| {
-                                                    m.insert(u_key, blob_url);
-                                                });
-                                            }
-                                        });
-                                    }
-                                    if is_first {
-                                        analyze_photo_with_ai(url_str);
-                                    }
+                                    handle_uploaded(url_str, auth_token);
+                                } else {
+                                    error_message.set(Some("Respuesta inesperada al capturar fotografía.".to_string()));
+                                }
+                            }
+                            Err(e) => {
+                                error_message.set(Some(js_err_msg(e, "No se pudo subir la fotografía capturada.")));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error_message.set(Some(format!("Error invocando captura en vivo: {:?}", e)));
+                    }
+                }
+                is_uploading_photo.set(false);
+            });
+        }
+    };
+
+    // Fallback: hardware camera input (capture="environment") when getUserMedia is unavailable
+    let upload_camera_photo = {
+        let photos = photos.clone();
+        let error_message = error_message.clone();
+        let is_uploading_photo = is_uploading_photo.clone();
+        let handle_uploaded = handle_uploaded_photo_url.clone();
+
+        move |_| {
+            if photos.get_untracked().len() >= 2 {
+                error_message.set(Some("Límite alcanzado: máximo 2 fotografías por reporte.".to_string()));
+                return;
+            }
+            is_uploading_photo.set(true);
+            error_message.set(None);
+
+            let dom = active_domain.get_untracked();
+            let auth_token = current_user.get_untracked().map(|u| u.token).unwrap_or_default();
+            let target_upload_url = upload_report_url(dom == AlertDomain::Ciudadana);
+            let url_js = serde_json::to_string(&target_upload_url).unwrap_or_else(|_| "\"\"".to_string());
+            let tok_js = serde_json::to_string(&auth_token).unwrap_or_else(|_| "\"\"".to_string());
+            let handle_uploaded = handle_uploaded.clone();
+
+            spawn_local(async move {
+                let script = format!(
+                    "window.ecoUpload.uploadFile('report-camera-input', {}, {}, 'camera_input')",
+                    url_js, tok_js
+                );
+                match js_sys::eval(&script) {
+                    Ok(promise_val) => {
+                        let promise = js_sys::Promise::from(promise_val);
+                        match JsFuture::from(promise).await {
+                            Ok(val) => {
+                                if let Some(url_str) = val.as_string() {
+                                    handle_uploaded(url_str, auth_token);
                                 } else {
                                     error_message.set(Some("Respuesta inesperada al subir foto.".to_string()));
                                 }
                             }
                             Err(e) => {
-                                let msg = if let Some(err) = e.dyn_ref::<js_sys::Error>() {
-                                    err.message().into()
-                                } else if let Some(s) = e.as_string() {
-                                    s
-                                } else {
-                                    "Error al procesar la fotografía.".to_string()
-                                };
-                                error_message.set(Some(msg));
+                                error_message.set(Some(js_err_msg(e, "Error al procesar la fotografía.")));
                             }
                         }
                     }
@@ -346,23 +490,12 @@ pub fn ReportDialog(
                         error_message.set(Some(format!("Error invocando cargador: {:?}", e)));
                     }
                 }
-                let _ = js_sys::eval(&format!(
-                    "if(document.getElementById('{}')) document.getElementById('{}').value = ''",
-                    input_id, input_id
-                ));
+                let _ = js_sys::eval(
+                    "if(document.getElementById('report-camera-input')) document.getElementById('report-camera-input').value = ''"
+                );
                 is_uploading_photo.set(false);
             });
         }
-    };
-
-    let upload_camera_photo = {
-        let upload = upload_from_input.clone();
-        move |_| upload("report-camera-input")
-    };
-
-    let upload_gallery_photo = {
-        let upload = upload_from_input.clone();
-        move |_| upload("report-gallery-input")
     };
 
     let remove_photo = move |idx: usize| {
@@ -389,9 +522,11 @@ pub fn ReportDialog(
 
     let locate_current_gps = move |_| {
         is_locating.set(true);
+        gps_error.set(None);
         spawn_local(async move {
             match get_browser_gps_position().await {
                 Ok((lat, lng)) => {
+                    verified_gps.set(Some((lat, lng)));
                     report_center.set((lat, lng));
                     let _ = js_sys::eval(&format!("window.ecoMap.setUserLocation({}, {});", lat, lng));
                     let (addr_str, dist) = reverse_geocode(lat, lng).await;
@@ -399,6 +534,7 @@ pub fn ReportDialog(
                     district.set(dist);
                 }
                 Err(err_msg) => {
+                    gps_error.set(Some(err_msg.clone()));
                     error_message.set(Some(err_msg));
                 }
             }
@@ -438,6 +574,20 @@ pub fn ReportDialog(
             return;
         }
 
+        let dom = active_domain.get();
+        let photo_list = photos.get();
+        if dom == AlertDomain::Ambiental && photo_list.is_empty() {
+            error_message.set(Some(
+                "Debes tomar al menos una fotografía en vivo con tu cámara para reportar un incidente ambiental.".to_string()
+            ));
+            return;
+        }
+
+        if let Some(gps_msg) = gps_check_error() {
+            error_message.set(Some(gps_msg));
+            return;
+        }
+
         let t = title.get();
         let d = description.get();
         let addr = address.get();
@@ -453,12 +603,15 @@ pub fn ReportDialog(
         }
 
         let (lat, lng) = report_center.get();
-        let photo_list = photos.get();
+        let (rep_lat, rep_lng) = match verified_gps.get() {
+            Some((glat, glng)) => (Some(glat), Some(glng)),
+            None => (None, None),
+        };
         let img1 = photo_list.get(0).cloned();
         let img2 = photo_list.get(1).cloned();
 
         let payload = CreateAlertPayload {
-            domain: Some(active_domain.get()),
+            domain: Some(dom),
             title: t.trim().to_string(),
             description: if d.trim().is_empty() {
                 "Reporte ciudadano sin descripción extendida.".to_string()
@@ -473,6 +626,8 @@ pub fn ReportDialog(
             longitude: lng,
             image_url: img1,
             image_url_2: img2,
+            reporter_latitude: rep_lat,
+            reporter_longitude: rep_lng,
         };
 
         is_submitting.set(true);
@@ -547,7 +702,7 @@ pub fn ReportDialog(
                             <div class="w-12 h-1.5 bg-slate-300 rounded-full"></div>
                         </div>
 
-                        // Accessible inputs: Camara directa y Galeria/Archivos
+                        // Fallback accesible únicamente a cámara directa del hardware (sin galería)
                         <input
                             type="file"
                             id="report-camera-input"
@@ -556,13 +711,78 @@ pub fn ReportDialog(
                             class="sr-only"
                             on:change=upload_camera_photo
                         />
-                        <input
-                            type="file"
-                            id="report-gallery-input"
-                            accept="image/*"
-                            class="sr-only"
-                            on:change=upload_gallery_photo
-                        />
+
+                        // Visor modal nativo <dialog> para Cámara en Vivo (getUserMedia, sin galería)
+                        <dialog
+                            id="live-camera-dialog"
+                            aria-labelledby="live-camera-title"
+                            class="m-auto w-[calc(100vw-1.5rem)] max-w-md rounded-3xl bg-slate-950 text-white p-0 border border-white/15 shadow-2xl overflow-hidden"
+                        >
+                            <div class="px-4 py-3 flex items-center justify-between border-b border-white/10 bg-slate-900/95">
+                                <div class="flex items-center space-x-2 min-w-0">
+                                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+                                    <h1 id="live-camera-title" class="text-sm font-bold text-white truncate">
+                                        "Cámara en Vivo · Evidencia Real"
+                                    </h1>
+                                </div>
+                                <button
+                                    type="button"
+                                    aria-label="Cerrar cámara en vivo"
+                                    class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer"
+                                    on:click=move |_| {
+                                        let _ = js_sys::eval("if (window.ecoCamera) window.ecoCamera.close('live-camera-dialog');");
+                                    }
+                                >
+                                    <i class="fa-solid fa-xmark text-xs"></i>
+                                </button>
+                            </div>
+                            <div class="relative bg-black aspect-[4/3] w-full flex items-center justify-center overflow-hidden">
+                                <video
+                                    id="live-camera-video"
+                                    autoplay
+                                    playsinline
+                                    muted
+                                    class="w-full h-full object-cover"
+                                ></video>
+                                <div class="pointer-events-none absolute inset-3 border border-white/25 rounded-2xl"></div>
+                            </div>
+                            <div class="p-4 bg-slate-900 space-y-3">
+                                <p class="text-[11px] text-slate-300 text-center leading-snug">
+                                    "Captura directamente el incidente. La cámara se apaga al instante tras tomar la foto."
+                                </p>
+                                <div class="flex items-center justify-between gap-2.5">
+                                    <button
+                                        type="button"
+                                        class="px-3 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer"
+                                        on:click=move |_| {
+                                            let _ = js_sys::eval("if (window.ecoCamera) window.ecoCamera.switchCamera('live-camera-dialog', 'live-camera-video');");
+                                        }
+                                    >
+                                        <i class="fa-solid fa-camera-rotate text-xs"></i>
+                                        <span>"Voltear"</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        autofocus
+                                        class="flex-1 py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] text-slate-950 font-bold text-xs flex items-center justify-center space-x-2 shadow-md transition cursor-pointer"
+                                        disabled=move || is_uploading_photo.get()
+                                        on:click=capture_live_photo
+                                    >
+                                        <i class="fa-solid fa-camera text-sm"></i>
+                                        <span>"Capturar Evidencia"</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="px-3 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 text-xs font-semibold transition cursor-pointer"
+                                        on:click=move |_| {
+                                            let _ = js_sys::eval("if (window.ecoCamera) window.ecoCamera.close('live-camera-dialog');");
+                                        }
+                                    >
+                                        "Cancelar"
+                                    </button>
+                                </div>
+                            </div>
+                        </dialog>
 
                         // Modal Header
                         <div class="flex items-center justify-between border-b border-slate-100 pb-3">
@@ -699,13 +919,13 @@ pub fn ReportDialog(
 
                             <p class="text-[11px] text-slate-500 leading-relaxed">
                                 {move || if active_domain.get() == AlertDomain::Ciudadana {
-                                    "Foto opcional y privada: solo personal autorizado de Serenazgo podrá verla (nunca el público)."
+                                    "Foto opcional y privada (solo cámara en vivo, sin galería): solo Serenazgo podrá verla."
                                 } else {
-                                    "Sube la fotografía del incidente. Google Gemini Vision AI analizará la gravedad y autocompletará los detalles automáticamente."
+                                    "Obligatorio: toma la fotografía en vivo con tu cámara (sin galería para evitar reportes repetidos). La cámara se apaga al instante tras capturar."
                                 }}
                             </p>
 
-                            // Photo Slots & Upload Grid - Pure Symmetrical Layout
+                            // Photo Slots & Live Camera Button - No Gallery
                             <div class="grid grid-cols-2 gap-3 pt-0.5">
                                 // Slot 1 & 2 Photos
                                 {move || photos.get().into_iter().enumerate().map(|(idx, url)| {
@@ -755,50 +975,37 @@ pub fn ReportDialog(
                                         view! {
                                             <div class="col-span-2 py-6 px-4 rounded-2xl border-2 border-dashed border-purple-300 bg-purple-50/50 flex flex-col items-center justify-center space-y-2">
                                                 <span class="inline-block w-6 h-6 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></span>
-                                                <span class="font-bold text-xs text-purple-800">"Optimizando y subiendo fotografía..."</span>
-                                                <span class="text-[10px] text-purple-600 font-medium">"Reduciendo tamaño para transmisión rápida"</span>
+                                                <span class="font-bold text-xs text-purple-800">"Validando y subiendo fotografía..."</span>
+                                                <span class="text-[10px] text-purple-600 font-medium">"Verificando unicidad e impacto ambiental"</span>
                                             </div>
                                         }.into_view()
                                     } else {
-                                        // 0 photos: Side-by-side Camera and Gallery buttons
+                                        let open_cam = open_live_camera.clone();
                                         view! {
-                                            <label
-                                                for="report-camera-input"
-                                                class=move || format!(
-                                                    "col-span-1 py-4 px-3 rounded-2xl border-2 border-emerald-300 hover:border-emerald-500 bg-gradient-to-b from-emerald-50/80 to-white text-slate-800 flex flex-col items-center justify-center space-y-2 transition active:scale-[0.98] cursor-pointer shadow-xs group select-none text-center {}",
-                                                    if is_uploading_photo.get() || is_analyzing_ai.get() { "pointer-events-none opacity-50" } else { "" }
-                                                )
+                                            <button
+                                                type="button"
+                                                disabled=move || is_uploading_photo.get() || is_analyzing_ai.get() || is_camera_starting.get()
+                                                on:click=open_cam
+                                                class="col-span-2 py-5 px-4 rounded-2xl border-2 border-emerald-300 hover:border-emerald-500 bg-gradient-to-b from-emerald-50/85 to-white text-slate-800 flex flex-col items-center justify-center space-y-2 transition active:scale-[0.99] cursor-pointer shadow-xs group select-none text-center disabled:opacity-50"
                                             >
-                                                <div class="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition">
-                                                    <i class="fa-solid fa-camera text-base"></i>
+                                                <div class="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition">
+                                                    {move || if is_camera_starting.get() {
+                                                        view! { <span class="inline-block w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span> }.into_view()
+                                                    } else {
+                                                        view! { <i class="fa-solid fa-camera text-lg"></i> }.into_view()
+                                                    }}
                                                 </div>
                                                 <div>
-                                                    <span class="block font-bold text-xs text-slate-900 leading-tight">"Tomar Foto"</span>
-                                                    <span class="block text-[10px] text-emerald-700 font-semibold mt-0.5">"Abrir cámara"</span>
+                                                    <span class="block font-bold text-xs sm:text-sm text-slate-900 leading-tight">"Tomar Foto en Vivo (Cámara)"</span>
+                                                    <span class="block text-[10px] text-emerald-700 font-semibold mt-0.5">"Captura directa del celular · Sin galería"</span>
                                                 </div>
-                                            </label>
-
-                                            <label
-                                                for="report-gallery-input"
-                                                class=move || format!(
-                                                    "col-span-1 py-4 px-3 rounded-2xl border-2 border-slate-200 hover:border-slate-400 bg-gradient-to-b from-slate-50/80 to-white text-slate-800 flex flex-col items-center justify-center space-y-2 transition active:scale-[0.98] cursor-pointer shadow-xs group select-none text-center {}",
-                                                    if is_uploading_photo.get() || is_analyzing_ai.get() { "pointer-events-none opacity-50" } else { "" }
-                                                )
-                                            >
-                                                <div class="w-11 h-11 rounded-2xl bg-slate-100 text-slate-700 flex items-center justify-center shadow-xs group-hover:scale-105 transition">
-                                                    <i class="fa-solid fa-images text-base"></i>
-                                                </div>
-                                                <div>
-                                                    <span class="block font-bold text-xs text-slate-900 leading-tight">"Subir Galería"</span>
-                                                    <span class="block text-[10px] text-slate-500 font-medium mt-0.5">"Elegir archivo"</span>
-                                                </div>
-                                            </label>
+                                            </button>
                                         }.into_view()
                                     }
                                 } else if photos.get().len() == 1 {
-                                    // 1 photo: Symmetric second slot with camera & gallery choices
+                                    let open_cam = open_live_camera.clone();
                                     view! {
-                                        <div class="aspect-square w-full rounded-2xl border-2 border-dashed border-slate-300 bg-white p-2.5 flex flex-col justify-between items-center text-center shadow-2xs">
+                                        <div class="aspect-square w-full rounded-2xl border-2 border-dashed border-emerald-300 bg-emerald-50/30 p-3 flex flex-col justify-center items-center text-center shadow-2xs">
                                             {move || if is_uploading_photo.get() {
                                                 view! {
                                                     <div class="h-full flex flex-col items-center justify-center space-y-1">
@@ -807,28 +1014,21 @@ pub fn ReportDialog(
                                                     </div>
                                                 }.into_view()
                                             } else {
+                                                let open_cam_inner = open_cam.clone();
                                                 view! {
-                                                    <span class="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-0.5">
-                                                        "+ 2da Evidencia"
-                                                    </span>
-                                                    <div class="w-full grid grid-cols-2 gap-1.5 mb-0.5">
-                                                        <label
-                                                            for="report-camera-input"
-                                                            class="py-2 px-1 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 flex flex-col items-center justify-center transition active:scale-95 cursor-pointer shadow-2xs"
-                                                            title="Tomar foto con cámara"
-                                                        >
-                                                            <i class="fa-solid fa-camera text-xs mb-0.5 text-emerald-600"></i>
-                                                            <span class="text-[9px] font-bold">"Cámara"</span>
-                                                        </label>
-                                                        <label
-                                                            for="report-gallery-input"
-                                                            class="py-2 px-1 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 flex flex-col items-center justify-center transition active:scale-95 cursor-pointer shadow-2xs"
-                                                            title="Elegir de galería"
-                                                        >
-                                                            <i class="fa-solid fa-images text-xs mb-0.5 text-slate-600"></i>
-                                                            <span class="text-[9px] font-bold">"Galería"</span>
-                                                        </label>
-                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        disabled=move || is_uploading_photo.get() || is_analyzing_ai.get() || is_camera_starting.get()
+                                                        on:click=open_cam_inner
+                                                        class="w-full h-full rounded-xl bg-white hover:bg-emerald-50 border border-emerald-200 text-emerald-800 flex flex-col items-center justify-center space-y-1.5 transition active:scale-95 cursor-pointer shadow-2xs p-2"
+                                                        title="Tomar segunda foto en vivo"
+                                                    >
+                                                        <div class="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+                                                            <i class="fa-solid fa-camera text-sm"></i>
+                                                        </div>
+                                                        <span class="text-[11px] font-bold text-slate-800">"+ 2da Foto en Vivo"</span>
+                                                        <span class="text-[9px] text-emerald-700 font-semibold">"Otro ángulo"</span>
+                                                    </button>
                                                 }.into_view()
                                             }}
                                         </div>
@@ -837,6 +1037,22 @@ pub fn ReportDialog(
                                     view! { <span class="hidden"></span> }.into_view()
                                 }}
                             </div>
+
+                            // Fallback hardware camera notice if getUserMedia is unavailable or denied
+                            {move || camera_error.get().map(|cam_err| view! {
+                                <div class="p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-950 text-[11px] space-y-2">
+                                    <p class="font-medium leading-snug">{cam_err}</p>
+                                    {move || camera_fallback_mode.get().then(|| view! {
+                                        <label
+                                            for="report-camera-input"
+                                            class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] cursor-pointer transition shadow-2xs"
+                                        >
+                                            <i class="fa-solid fa-camera text-[10px]"></i>
+                                            <span>"Usar cámara nativa del celular"</span>
+                                        </label>
+                                    })}
+                                </div>
+                            })}
 
                             // AI Scanning Animated Card
                             {move || is_analyzing_ai.get().then(|| view! {
@@ -944,7 +1160,7 @@ pub fn ReportDialog(
                             // Location & GPS row
                             <div class="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-2">
                                 <div class="flex items-center justify-between text-[11px]">
-                                    <span class="font-bold text-slate-400 uppercase tracking-wider text-[10px]">"Ubicación en el Mapa"</span>
+                                    <span class="font-bold text-slate-400 uppercase tracking-wider text-[10px]">"Ubicación y Verificación GPS"</span>
                                     <span class="font-mono text-slate-700 font-medium">
                                         {move || {
                                             let (clat, clng) = report_center.get();
@@ -952,10 +1168,10 @@ pub fn ReportDialog(
                                         }}
                                     </span>
                                 </div>
-                                <div class="flex items-center space-x-2">
+                                <div class="flex flex-wrap items-center gap-2">
                                     <button
                                         type="button"
-                                        class="py-1.5 px-3 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition shadow-xs"
+                                        class="py-1.5 px-3 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition shadow-xs cursor-pointer"
                                         disabled=move || is_locating.get()
                                         on:click=locate_current_gps
                                     >
@@ -978,6 +1194,31 @@ pub fn ReportDialog(
                                         <span class="text-[11px] text-slate-400 italic">"Identificando calle..."</span>
                                     })}
                                 </div>
+
+                                // GPS Verification Pill (Inline privacy + anti-remote-spam feedback)
+                                {move || {
+                                    if let Some(err_gps) = gps_check_error() {
+                                        view! {
+                                            <div class="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-900 flex items-start space-x-2">
+                                                <span class="shrink-0">"📍"</span>
+                                                <span class="leading-snug font-medium">{err_gps}</span>
+                                            </div>
+                                        }.into_view()
+                                    } else if let Some(dist_m) = gps_distance_m() {
+                                        view! {
+                                            <div class="p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-800 flex items-center space-x-1.5 font-semibold">
+                                                <span>"✓"</span>
+                                                <span>{format!("GPS verificado en el sitio ({:.0} m del punto marcado)", dist_m)}</span>
+                                            </div>
+                                        }.into_view()
+                                    } else {
+                                        view! {
+                                            <p class="text-[10px] text-slate-500">
+                                                "Validamos tu posición GPS para confirmar reportes desde el lugar del incidente."
+                                            </p>
+                                        }.into_view()
+                                    }
+                                }}
                             </div>
 
                             // Form Inputs
@@ -1108,7 +1349,9 @@ pub fn ReportDialog(
                                 disabled=move || {
                                     let cd = cooldown_remaining();
                                     let is_dup = nearby_duplicate().is_some();
-                                    is_submitting.get() || (cd > 0) || is_dup || is_blocked_by_ai.get() || is_analyzing_ai.get()
+                                    let missing_photo = active_domain.get() == AlertDomain::Ambiental && photos.get().is_empty();
+                                    let gps_invalid = gps_check_error().is_some();
+                                    is_submitting.get() || (cd > 0) || is_dup || is_blocked_by_ai.get() || is_analyzing_ai.get() || missing_photo || gps_invalid
                                 }
                                 on:click=submit_report
                             >
@@ -1116,12 +1359,12 @@ pub fn ReportDialog(
                                     view! {
                                         <span class="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
                                         <span>"Registrando..."</span>
-                                    }
+                                    }.into_view()
                                 } else if is_analyzing_ai.get() {
                                     view! {
                                         <span class="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
                                         <span>"Analizando evidencia..."</span>
-                                    }
+                                    }.into_view()
                                 } else if is_blocked_by_ai.get() {
                                     view! {
                                         <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1129,7 +1372,17 @@ pub fn ReportDialog(
                                             <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
                                         </svg>
                                         <span>"Bloqueado: No es Ambiental"</span>
-                                    }
+                                    }.into_view()
+                                } else if active_domain.get() == AlertDomain::Ambiental && photos.get().is_empty() {
+                                    view! {
+                                        <i class="fa-solid fa-camera text-xs"></i>
+                                        <span>"Toma Foto en Vivo"</span>
+                                    }.into_view()
+                                } else if gps_check_error().is_some() {
+                                    view! {
+                                        <i class="fa-solid fa-location-crosshairs text-xs"></i>
+                                        <span>{if verified_gps.get().is_none() { "Activa tu GPS" } else { "Acércate al punto" }}</span>
+                                    }.into_view()
                                 } else if cooldown_remaining() > 0 {
                                     let cd = cooldown_remaining();
                                     view! {
@@ -1138,14 +1391,14 @@ pub fn ReportDialog(
                                             <polyline points="12 6 12 12 16 14"></polyline>
                                         </svg>
                                         <span>{format!("Espera ({}s)", cd)}</span>
-                                    }
+                                    }.into_view()
                                 } else if nearby_duplicate().is_some() {
                                     view! {
                                         <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                             <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
                                         </svg>
                                         <span>"Alerta Duplicada"</span>
-                                    }
+                                    }.into_view()
                                 } else {
                                     view! {
                                         <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1153,7 +1406,7 @@ pub fn ReportDialog(
                                             <polygon points="22 2 15 22 11 13 2 9 22 2"/>
                                         </svg>
                                         <span>"Publicar Reporte"</span>
-                                    }
+                                    }.into_view()
                                 }}
                             </button>
                         </div>

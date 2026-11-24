@@ -93,6 +93,17 @@
       animation: userLocationPulse 2s infinite cubic-bezier(0.4, 0, 0.2, 1);
     }
 
+    /* Native modal <dialog> scroll containment & backdrop */
+    dialog:modal {
+      overscroll-behavior: contain;
+    }
+    dialog::backdrop {
+      overflow: hidden;
+      overscroll-behavior: contain;
+      background: rgba(15, 23, 42, 0.72);
+      backdrop-filter: blur(6px);
+    }
+
     /* Google Gemini AI Vision Holographic Scanner Animations */
     @keyframes geminiLaserScan {
       0% {
@@ -1219,10 +1230,13 @@
         });
       },
 
-      _sendFile: async function(rawFile, uploadUrl, explicitToken) {
+      _sendFile: async function(rawFile, uploadUrl, explicitToken, captureSource) {
         const file = await this._compressImage(rawFile);
         const formData = new FormData();
         formData.append("image", file);
+        if (captureSource) {
+          formData.append("capture_source", captureSource);
+        }
         const token = explicitToken || window.localStorage.getItem("eco_auth_token") || "";
         const headers = {};
         if (token) {
@@ -1240,7 +1254,7 @@
         return data.url;
       },
 
-      uploadFile: async function(inputIdOrUrl, uploadUrlOrToken, authToken) {
+      uploadFile: async function(inputIdOrUrl, uploadUrlOrToken, authToken, captureSource) {
         // Modo selector directo (usado por Panel de Autoridades al adjuntar evidencia de resolución)
         if (typeof inputIdOrUrl === "string" && (inputIdOrUrl.startsWith("http://") || inputIdOrUrl.startsWith("https://") || inputIdOrUrl.startsWith("/"))) {
           const uploadUrl = inputIdOrUrl;
@@ -1255,7 +1269,7 @@
                 return;
               }
               try {
-                const uploadedUrl = await window.ecoUpload._sendFile(picker.files[0], uploadUrl, token);
+                const uploadedUrl = await window.ecoUpload._sendFile(picker.files[0], uploadUrl, token, "authority");
                 resolve(uploadedUrl);
               } catch (err) {
                 reject(err);
@@ -1265,12 +1279,139 @@
           });
         }
 
-        // Modo input DOM existente (usado por ReportDialog ciudadano)
+        // Modo input DOM existente (cámara directa fallback en ReportDialog)
         const input = document.getElementById(inputIdOrUrl);
         if (!input || !input.files || input.files.length === 0) {
           throw new Error("Selecciona un archivo de imagen válido.");
         }
-        return window.ecoUpload._sendFile(input.files[0], uploadUrlOrToken, authToken || "");
+        return window.ecoUpload._sendFile(input.files[0], uploadUrlOrToken, authToken || "", captureSource || "camera_input");
+      }
+    };
+
+    window.ecoCamera = {
+      _stream: null,
+      _facingMode: "environment",
+
+      isSupported: function() {
+        return !!(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
+      },
+
+      stopStream: function() {
+        if (this._stream) {
+          try {
+            this._stream.getTracks().forEach((t) => t.stop());
+          } catch (e) {}
+          this._stream = null;
+        }
+      },
+
+      close: function(dialogId) {
+        this.stopStream();
+        const dlg = document.getElementById(dialogId || "live-camera-dialog");
+        if (dlg) {
+          const video = dlg.querySelector("video");
+          if (video) {
+            video.srcObject = null;
+          }
+          if (dlg.open) {
+            dlg.close();
+          }
+        }
+      },
+
+      open: async function(dialogId, videoId) {
+        if (!this.isSupported()) {
+          throw new Error("Tu navegador no permite acceso directo a la cámara en vivo.");
+        }
+        const dlg = document.getElementById(dialogId || "live-camera-dialog");
+        const video = document.getElementById(videoId || "live-camera-video");
+        if (!dlg || !video) {
+          throw new Error("No se pudo inicializar el visor de cámara.");
+        }
+
+        if (!dlg.dataset.cameraBound) {
+          dlg.addEventListener("close", () => {
+            dlg.returnValue = "";
+            window.ecoCamera.stopStream();
+            const v = dlg.querySelector("video");
+            if (v) v.srcObject = null;
+          });
+          dlg.dataset.cameraBound = "1";
+        }
+
+        this.stopStream();
+        if (!dlg.open) {
+          dlg.showModal();
+        }
+
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: this._facingMode },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 }
+            },
+            audio: false
+          });
+        } catch (err) {
+          this.close(dialogId);
+          if (err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError")) {
+            throw new Error("Permiso de cámara denegado. Habilita la cámara en tu navegador para tomar la foto en vivo.");
+          }
+          if (err && (err.name === "NotFoundError" || err.name === "DevicesNotFoundError")) {
+            throw new Error("No se detectó cámara disponible en este dispositivo.");
+          }
+          throw new Error((err && err.message) || "No se pudo abrir la cámara en vivo.");
+        }
+
+        this._stream = stream;
+        video.srcObject = stream;
+        await video.play().catch(() => {});
+        return true;
+      },
+
+      switchCamera: async function(dialogId, videoId) {
+        this._facingMode = this._facingMode === "environment" ? "user" : "environment";
+        return this.open(dialogId, videoId);
+      },
+
+      captureAndUpload: async function(dialogId, videoId, uploadUrl, authToken) {
+        const video = document.getElementById(videoId || "live-camera-video");
+        if (!video || !video.videoWidth || !video.videoHeight) {
+          throw new Error("La cámara aún está iniciando. Espera un segundo e inténtalo nuevamente.");
+        }
+
+        const maxDim = 1600;
+        let width = video.videoWidth;
+        let height = video.videoHeight;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0, width, height);
+
+        const blob = await new Promise((resolve, reject) => {
+          canvas.toBlob(
+            (b) => (b ? resolve(b) : reject(new Error("No se pudo capturar la imagen de la cámara."))),
+            "image/jpeg",
+            0.88
+          );
+        });
+
+        this.close(dialogId);
+        const liveFile = new File([blob], `camara_${Date.now()}.jpg`, { type: "image/jpeg" });
+        return window.ecoUpload._sendFile(liveFile, uploadUrl, authToken || "", "live_camera");
       }
     };
 
