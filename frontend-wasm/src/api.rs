@@ -137,6 +137,18 @@ pub fn upload_url() -> String {
     format!("{}/api/upload/", api_base_url())
 }
 
+pub fn upload_private_url() -> String {
+    format!("{}/api/upload/?scope=ciudadana", api_base_url())
+}
+
+pub fn alert_evidence_url(alert_id: &str, slot: u8) -> String {
+    format!("{}/api/alerts/{}/evidence/{}/", api_base_url(), alert_id, slot)
+}
+
+pub fn alerts_ciudadana_history_url() -> String {
+    format!("{}/api/alerts/?domain=ciudadana&include_expired=1", api_base_url())
+}
+
 pub fn waste_points_url() -> String {
     format!("{}/api/waste-points/", api_base_url())
 }
@@ -206,4 +218,37 @@ pub fn trucks_url() -> String {
 
 pub fn admin_url(path: &str) -> String {
     format!("{}/admin/{}", api_base_url(), path.trim_start_matches('/'))
+}
+
+pub fn is_protected_evidence_url(url: &str) -> bool {
+    url.contains("/api/evidence/private/") || (url.contains("/api/alerts/") && url.contains("/evidence/"))
+}
+
+pub async fn fetch_protected_image_blob_url(url: &str, token: &str) -> Result<String, String> {
+    let resp = gloo_net::http::Request::get(url)
+        .header("Authorization", &format!("Token {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Error de red: {:?}", e))?;
+
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let bytes = resp
+        .binary()
+        .await
+        .map_err(|e| format!("Error leyendo bytes: {:?}", e))?;
+
+    let uint8 = js_sys::Uint8Array::from(bytes.as_slice());
+    let array = js_sys::Array::new();
+    array.push(&uint8.buffer());
+
+    let props = web_sys::BlobPropertyBag::new();
+    props.set_type("image/webp");
+
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&array, &props)
+        .map_err(|e| format!("Error creando Blob: {:?}", e))?;
+    web_sys::Url::create_object_url_with_blob(&blob)
+        .map_err(|e| format!("Error creando ObjectURL: {:?}", e))
 }

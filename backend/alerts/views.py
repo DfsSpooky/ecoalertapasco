@@ -11,9 +11,13 @@ from django.utils import timezone
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
+from django.db.models import Q
+from django.http import FileResponse
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
+from datetime import timedelta
 import os
+import uuid
 import math
 import io
 import re
@@ -24,7 +28,18 @@ import urllib.error
 import urllib.parse
 from PIL import Image, ImageOps
 
-from .models import Alert, WastePoint, SystemConfig, Truck, CollectionRoute, RouteRun, is_collector
+from .models import (
+    Alert,
+    WastePoint,
+    SystemConfig,
+    Truck,
+    CollectionRoute,
+    RouteRun,
+    is_collector,
+    is_serenazgo,
+    can_manage_domain,
+    can_view_private_evidence,
+)
 from .tracking import broadcast_run_state, ingest_positions, public_open_runs_queryset, public_run_payload
 from .serializers import (
     AlertSerializer,
@@ -36,6 +51,30 @@ from .serializers import (
 )
 
 User = get_user_model()
+PRIVATE_EVIDENCE_DIR = os.path.join(settings.BASE_DIR, 'private_media', 'evidence')
+
+
+def _resolve_private_evidence_path(raw_url_or_name: str) -> str | None:
+    """Resuelve una ruta segura dentro de PRIVATE_EVIDENCE_DIR sin permitir traversal."""
+    if not raw_url_or_name:
+        return None
+    cleaned = str(raw_url_or_name).strip().split('?')[0]
+    filename = os.path.basename(cleaned)
+    if not filename or filename.startswith('.') or '/' in filename or '\\' in filename:
+        return None
+    base_dir = os.path.abspath(PRIVATE_EVIDENCE_DIR)
+    target = os.path.abspath(os.path.join(base_dir, filename))
+    if not target.startswith(base_dir + os.sep):
+        return None
+    return target
+
+
+class IsAlertAuthority(permissions.BasePermission):
+    """Permite acciones de gestión a personal ambiental (is_staff), Serenazgo o superadmin."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user and user.is_authenticated and (user.is_superuser or user.is_staff or is_serenazgo(user)))
 
 
 class AlertCreateRateThrottle(UserRateThrottle):
@@ -93,25 +132,32 @@ class LoginRateThrottle(SimpleRateThrottle):
 def compute_sync_etag(user) -> tuple[str, set[int]]:
     """
     Calcula una huella criptográfica ligera (ETag) del estado actual del mapa
-    (alertas, puntos de acopio y respaldos del usuario autenticado) en una fracción
+    (alertas vigentes, puntos de acopio y respaldos del usuario autenticado) en una fracción
     de milisegundo sin hidratar modelos completos ni ejecutar serializadores.
     """
     h = hashlib.sha256()
+    now = timezone.now()
 
-    alert_rows = Alert.objects.order_by('id').values_list(
-        'id',
-        'status',
-        'severity',
-        'category',
-        'district',
-        'confirmations_count',
-        'resolved_at',
-        'history_log',
-        'image_url',
-        'image_url_2',
-        'resolution_image_url',
-        'title',
-        'resolution_comment',
+    alert_rows = (
+        Alert.objects.filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+        .order_by('id')
+        .values_list(
+            'id',
+            'domain',
+            'status',
+            'severity',
+            'category',
+            'district',
+            'confirmations_count',
+            'resolved_at',
+            'expires_at',
+            'history_log',
+            'image_url',
+            'image_url_2',
+            'resolution_image_url',
+            'title',
+            'resolution_comment',
+        )
     )
     for row in alert_rows:
         h.update(repr(row).encode('utf-8'))
@@ -153,7 +199,7 @@ class SyncMapDataView(APIView):
     """
     Endpoint unificado de Smart Polling condicional para producción (GET /api/sync/).
     - Si el ETag del cliente coincide con el estado actual en BD, responde HTTP 304 Not Modified (0 bytes).
-    - Si hubo cambios (o es carga inicial), retorna alertas + puntos de acopio + nuevo ETag en un solo viaje HTTP.
+    - Si hubo cambios (o es carga inicial), retorna alertas vigentes + puntos de acopio + nuevo ETag en un solo viaje HTTP.
     """
     permission_classes = [permissions.AllowAny]
     throttle_classes = [SyncRateThrottle]
@@ -174,7 +220,12 @@ class SyncMapDataView(APIView):
                 },
             )
 
-        alerts_qs = Alert.objects.select_related('reported_by').order_by('-created_at')
+        now = timezone.now()
+        alerts_qs = (
+            Alert.objects.select_related('reported_by')
+            .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+            .order_by('-created_at')
+        )
         waste_qs = WastePoint.objects.all().order_by('id')
 
         alerts_data = AlertSerializer(
@@ -222,11 +273,11 @@ class AlertViewSet(viewsets.ModelViewSet):
     serializer_class = AlertSerializer
 
     def get_permissions(self):
-        # Crear alertas requiere ciudadano autenticado; modificar o eliminar requiere autoridad municipal (is_staff)
-        if self.action == 'create':
+        # Crear, confirmar o ver evidencia privada requiere usuario autenticado; modificar o eliminar requiere autoridad del dominio
+        if self.action in ['create', 'confirm', 'evidence']:
             return [permissions.IsAuthenticated()]
         if self.action in ['partial_update', 'update', 'destroy']:
-            return [permissions.IsAdminUser()]
+            return [IsAlertAuthority()]
         return [permissions.AllowAny()]
 
     def get_throttles(self):
@@ -235,54 +286,78 @@ class AlertViewSet(viewsets.ModelViewSet):
             return [AlertCreateRateThrottle()]
         return super().get_throttles()
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action == 'list':
+            domain_param = (self.request.query_params.get('domain') or '').strip().lower()
+            if domain_param in ('ambiental', 'ciudadana'):
+                qs = qs.filter(domain=domain_param)
+            include_expired = self.request.query_params.get('include_expired') == '1'
+            if not (include_expired and can_manage_domain(self.request.user, 'ciudadana')):
+                qs = qs.filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
+        return qs
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        user = getattr(self.request, 'user', None)
+        if user and user.is_authenticated and (
+            user.is_superuser or is_serenazgo(user) or self.action in ('create', 'retrieve')
+        ):
+            context['include_private_citizen_fields'] = True
+        return context
+
     def perform_create(self, serializer):
         user = self.request.user
+        new_category = serializer.validated_data.get('category')
+        domain = 'ciudadana' if new_category in Alert.CITIZEN_CATEGORIES else 'ambiental'
 
-        # 1. Anti-spam Cooldown: Al menos 60 segundos entre reportes de un mismo usuario no-staff
-        if user.is_authenticated and not user.is_staff:
+        # 1. Anti-spam Cooldown: Al menos 60 segundos entre reportes de un mismo usuario no-autoridad
+        if user.is_authenticated and not (user.is_staff or is_serenazgo(user)):
             last_alert = Alert.objects.filter(reported_by=user).order_by('-created_at').first()
             if last_alert:
                 diff_seconds = (timezone.now() - last_alert.created_at).total_seconds()
                 if diff_seconds < 60:
                     wait_sec = int(60 - diff_seconds)
                     raise ValidationError({
-                        'detail': f'Debes esperar {wait_sec} segundos antes de enviar otro reporte ambiental.'
+                        'detail': f'Debes esperar {wait_sec} segundos antes de enviar otro reporte.'
                     })
 
-        # 2. Detección de duplicados espaciales en un radio de 50 metros
+        # 2. Detección de duplicados espaciales (50m/48h ambiental; 30m/2h ciudadana)
         new_lat = serializer.validated_data.get('latitude')
         new_lng = serializer.validated_data.get('longitude')
-        new_category = serializer.validated_data.get('category')
         new_title = serializer.validated_data.get('title', '').strip()
 
         if new_lat is not None and new_lng is not None:
-            # Buscar alertas activas (no solucionadas ni descartadas) en las últimas 48 horas
-            recent_threshold = timezone.now() - timezone.timedelta(hours=48)
+            now = timezone.now()
+            window_hours = 2 if domain == 'ciudadana' else 48
+            radius_m = 30 if domain == 'ciudadana' else 50
+            recent_threshold = now - timezone.timedelta(hours=window_hours)
             active_alerts = Alert.objects.filter(
+                domain=domain,
                 status__in=['pending', 'verified'],
-                created_at__gte=recent_threshold
-            )
+                created_at__gte=recent_threshold,
+            ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
 
             for existing in active_alerts:
                 dist = calculate_distance_meters(new_lat, new_lng, existing.latitude, existing.longitude)
-                # Misma categoría en radio <= 50 metros
-                if dist <= 50 and existing.category == new_category:
+                if dist <= radius_m and existing.category == new_category:
                     cat_name = dict(Alert.CATEGORY_CHOICES).get(new_category, new_category)
                     raise ValidationError({
                         'detail': f"Ya existe una alerta activa de {cat_name} a {int(dist)} metros ('{existing.title}'). Evitemos duplicar reportes en la misma zona."
                     })
-                # Mismo título exacto en radio <= 200 metros
                 if dist <= 200 and existing.title.strip().lower() == new_title.lower():
                     raise ValidationError({
                         'detail': f"Ya existe un reporte similar en esta zona ('{existing.title}'). Evitemos duplicar incidentes."
                     })
 
-        # 3. Validación estricta de evidencia fotográfica ambiental (Filtro Anti-Spam / No Ambiental)
+        # 3. Validación de evidencia fotográfica según dominio
         img1 = serializer.validated_data.get('image_url')
         img2 = serializer.validated_data.get('image_url_2')
         for img in [img1, img2]:
-            if img:
-                clean_key = img.split('uploads/')[-1] if 'uploads/' in img else img.strip()
+            if not img:
+                continue
+            clean_key = img.split('uploads/')[-1] if 'uploads/' in img else os.path.basename(img.strip().split('?')[0])
+            if domain == 'ambiental':
                 cached_analysis = cache.get(f"analysis_res_{img.strip()}") or cache.get(f"analysis_res_{clean_key}")
                 if cached_analysis and isinstance(cached_analysis, dict):
                     if cached_analysis.get('is_environmental_issue') is False:
@@ -290,43 +365,62 @@ class AlertViewSet(viewsets.ModelViewSet):
                             raise ValidationError({
                                 'detail': 'Reporte bloqueado: La evidencia fotográfica corresponde a basura menor cotidiana. El camión recolector municipal pasa habitualmente según su cronograma. EcoAlerta está reservado exclusivamente para focos y emergencias ambientales graves.'
                             })
-                        else:
-                            tech_msg = cached_analysis.get('technical_analysis') or 'La evidencia no muestra un problema de contaminación ambiental en Cerro de Pasco.'
-                            raise ValidationError({
-                                'detail': f'Reporte rechazado por filtro ambiental: {tech_msg}'
-                            })
+                        tech_msg = cached_analysis.get('technical_analysis') or 'La evidencia no muestra un problema de contaminación ambiental en Cerro de Pasco.'
+                        raise ValidationError({
+                            'detail': f'Reporte rechazado por filtro ambiental: {tech_msg}'
+                        })
+            else:
+                cached_analysis = cache.get(f"analysis_res_ciudadana_{img.strip()}") or cache.get(f"analysis_res_ciudadana_{clean_key}")
+                if cached_analysis and isinstance(cached_analysis, dict):
+                    if cached_analysis.get('rejection_reason') in ('inappropriate', 'not_relevant'):
+                        tech_msg = cached_analysis.get('technical_analysis') or 'La imagen no corresponde a una alerta ciudadana válida.'
+                        raise ValidationError({
+                            'detail': f'Evidencia rechazada por moderación: {tech_msg}'
+                        })
 
-        user_str = user.username if user.is_authenticated else "Ciudadano"
-        now_str = timezone.now().strftime("%Y-%m-%d %H:%M")
-        history_log = f"{now_str}|Reportado por {user_str}"
-
-        # Blindaje contra Mass Assignment / Escalada de privilegios:
-        # Los usuarios no-staff NO pueden forzar status 'solved'/'verified' ni adjuntar resoluciones al crear.
-        if not user.is_staff:
-            serializer.save(
-                reported_by=user if user.is_authenticated else None,
-                status='pending',
-                resolution_comment=None,
-                resolution_image_url=None,
-                resolved_at=None,
-                history_log=history_log
-            )
+        now = timezone.now()
+        now_str = now.strftime("%Y-%m-%d %H:%M")
+        if domain == 'ciudadana':
+            # En Seguridad Ciudadana el denunciante se guarda internamente, pero la bitácora pública es anónima
+            history_log = f"{now_str}|Reportado por Vecino Anónimo"
         else:
-            serializer.save(
-                reported_by=user if user.is_authenticated else None,
-                history_log=history_log
-            )
+            user_str = user.username if user.is_authenticated else "Ciudadano"
+            history_log = f"{now_str}|Reportado por {user_str}"
+
+        extra_kwargs = {
+            'reported_by': user if user.is_authenticated else None,
+            'domain': domain,
+            'history_log': history_log,
+        }
+        if domain == 'ciudadana':
+            extra_kwargs.update({
+                'is_anonymous_public': True,
+                'hide_media_public': True,
+                'expires_at': now + timedelta(hours=Alert.CITIZEN_TTL_HOURS),
+            })
+
+        # Blindaje contra Mass Assignment / Escalada de privilegios
+        if not can_manage_domain(user, domain):
+            extra_kwargs.update({
+                'status': 'pending',
+                'resolution_comment': None,
+                'resolution_image_url': None,
+                'resolved_at': None,
+            })
+
+        serializer.save(**extra_kwargs)
 
     def perform_update(self, serializer):
+        instance = serializer.instance
+        if not can_manage_domain(self.request.user, instance.domain):
+            raise PermissionDenied("No tienes permisos para gestionar alertas de este dominio.")
+
         new_status = serializer.validated_data.get('status')
         new_district = serializer.validated_data.get('district')
-        
-        # Solo personal autorizado / staff puede resolver o descartar alertas
-        if (new_status in ['solved', 'dismissed'] or new_district is not None) and not self.request.user.is_staff:
-            from rest_framework.exceptions import PermissionDenied
+
+        if (new_status in ['solved', 'dismissed'] or new_district is not None) and not can_manage_domain(self.request.user, instance.domain):
             raise PermissionDenied("Solo el personal autorizado puede resolver o transferir alertas.")
 
-        instance = serializer.instance
         old_status = instance.status
         old_district = instance.district
 
@@ -367,19 +461,58 @@ class AlertViewSet(viewsets.ModelViewSet):
 
         serializer.save(resolved_at=resolved_at_val, history_log=final_log)
 
+    def perform_destroy(self, instance):
+        if not can_manage_domain(self.request.user, instance.domain):
+            raise PermissionDenied("No tienes permisos para eliminar alertas de este dominio.")
+        instance.delete()
+
+    @action(detail=True, methods=['get'], url_path=r'evidence/(?P<slot>[12])', permission_classes=[permissions.IsAuthenticated])
+    def evidence(self, request, pk=None, slot='1'):
+        """Sirve de forma autenticada la evidencia privada ciudadana exclusivamente para Serenazgo, superadmin o autor."""
+        alert = self.get_object()
+        if alert.hide_media_public and not can_view_private_evidence(request.user, alert):
+            raise PermissionDenied("Solo personal de Serenazgo autorizado puede acceder a esta evidencia privada.")
+
+        raw_url = alert.image_url if str(slot) == '1' else alert.image_url_2
+        if not raw_url:
+            raise NotFound("No existe evidencia adjunta en este espacio.")
+
+        target_path = _resolve_private_evidence_path(raw_url)
+        if not target_path or not os.path.exists(target_path):
+            # Compatibilidad si la evidencia quedó almacenada en MEDIA_ROOT/uploads
+            filename = os.path.basename(str(raw_url).split('?')[0])
+            fallback_path = os.path.abspath(os.path.join(settings.MEDIA_ROOT, 'uploads', filename))
+            uploads_base = os.path.abspath(os.path.join(settings.MEDIA_ROOT, 'uploads'))
+            if fallback_path.startswith(uploads_base + os.sep) and os.path.exists(fallback_path):
+                target_path = fallback_path
+            else:
+                raise NotFound("Archivo de evidencia no encontrado.")
+
+        ext = os.path.splitext(target_path)[1].lower()
+        content_type = {
+            '.webp': 'image/webp',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+        }.get(ext, 'application/octet-stream')
+        return FileResponse(open(target_path, 'rb'), content_type=content_type)
+
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated], throttle_classes=[AlertConfirmRateThrottle])
     def confirm(self, request, pk=None):
         """Permite a ciudadanos confirmar o apoyar un reporte existente (+1)."""
-        from django.db import transaction
         with transaction.atomic():
             alert = self.get_object()
             user = request.user
 
-            # Prevención de Auto-respaldo / Manipulación ciudadana:
-            # Un usuario no puede confirmar (+1) sus propias denuncias a menos que sea staff realizando verificación.
-            if alert.reported_by_id and alert.reported_by_id == user.id and not user.is_staff:
+            if alert.is_expired():
                 raise ValidationError({
-                    'detail': 'No puedes respaldar tu propia denuncia ambiental.'
+                    'detail': 'Esta alerta efímera ya expiró y no admite nuevas confirmaciones.'
+                })
+
+            # Prevención de Auto-respaldo / Manipulación ciudadana
+            if alert.reported_by_id and alert.reported_by_id == user.id and not can_manage_domain(user, alert.domain):
+                raise ValidationError({
+                    'detail': 'No puedes respaldar tu propia denuncia o alerta.'
                 })
 
             if alert.confirmed_by.filter(id=user.id).exists():
@@ -403,8 +536,16 @@ class AlertViewSet(viewsets.ModelViewSet):
         import csv
         from django.http import HttpResponse
 
+        domain = (request.query_params.get('domain') or 'ambiental').strip().lower()
+        if domain not in ('ambiental', 'ciudadana'):
+            domain = 'ambiental'
+
+        if domain == 'ciudadana' and not can_manage_domain(request.user, 'ciudadana'):
+            raise PermissionDenied("Solo Serenazgo autorizado puede exportar incidencias ciudadanas.")
+
         response = HttpResponse(content_type='text/csv; charset=utf-8')
-        response['Content-Disposition'] = 'attachment; filename="ecoalerta_reportes_pasco.csv"'
+        fname = 'seguridad_ciudadana_pasco.csv' if domain == 'ciudadana' else 'ecoalerta_reportes_pasco.csv'
+        response['Content-Disposition'] = f'attachment; filename="{fname}"'
         response.write('\ufeff'.encode('utf8'))  # BOM para Excel
 
         writer = csv.writer(response)
@@ -414,7 +555,10 @@ class AlertViewSet(viewsets.ModelViewSet):
             'Reportado Por', 'Confirmaciones Ciudadanas', 'Fecha Solución',
             'Comentario de Solución'
         ])
-        for a in Alert.objects.all().order_by('-created_at'):
+        for a in Alert.objects.filter(domain=domain).order_by('-created_at'):
+            reporter = 'Vecino Anónimo' if (a.is_anonymous_public or a.domain == 'ciudadana') else (
+                a.reported_by.username if a.reported_by else 'Ciudadano'
+            )
             writer.writerow([
                 a.id,
                 a.created_at.strftime('%Y-%m-%d %H:%M'),
@@ -426,7 +570,7 @@ class AlertViewSet(viewsets.ModelViewSet):
                 a.latitude,
                 a.longitude,
                 a.get_status_display(),
-                a.reported_by.username if a.reported_by else 'Ciudadano',
+                reporter,
                 a.confirmations_count,
                 a.resolved_at.strftime('%Y-%m-%d %H:%M') if a.resolved_at else '',
                 a.resolution_comment or ''
@@ -708,7 +852,9 @@ class LoginView(APIView):
                 'username': user.username,
                 'email': user.email,
                 'is_staff': user.is_staff,
+                'is_superuser': user.is_superuser,
                 'is_collector': is_collector(user),
+                'is_serenazgo': is_serenazgo(user),
             })
         return Response({'error': 'Credenciales inválidas. Verifica tu usuario y contraseña.'}, status=status.HTTP_401_UNAUTHORIZED)
 
@@ -960,7 +1106,9 @@ class GoogleAuthView(APIView):
             'username': user.username,
             'email': user.email,
             'is_staff': user.is_staff,
+            'is_superuser': user.is_superuser,
             'is_collector': is_collector(user),
+            'is_serenazgo': is_serenazgo(user),
             'full_name': user.get_full_name() or user.username,
             'photo_url': picture
         }, status=status.HTTP_200_OK)
@@ -1027,6 +1175,16 @@ class ImageUploadView(APIView):
     MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 
     def post(self, request):
+        scope = str(request.data.get('scope') or request.query_params.get('scope') or '').strip().lower()
+        private_flag = str(request.data.get('private') or request.query_params.get('private') or '').strip().lower()
+        is_private = (scope == 'ciudadana') or (private_flag in ('1', 'true', 'yes'))
+
+        if is_private and not (request.user and request.user.is_authenticated):
+            return Response(
+                {'error': 'Debes iniciar sesión para subir evidencia privada de Serenazgo.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
         file_obj = request.FILES.get('image')
         if not file_obj:
             return Response({'error': 'No se adjuntó ningún archivo de imagen.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1047,11 +1205,20 @@ class ImageUploadView(APIView):
 
         clean_base = os.path.splitext(os.path.basename(file_obj.name))[0].replace(" ", "_")
         clean_base = re.sub(r'[^\w\-]', '', clean_base) or 'evidencia'
-        target_name = f"{int(timezone.now().timestamp())}_{clean_base}.webp"
-        target_path = os.path.join('uploads', target_name)
 
-        file_name = default_storage.save(target_path, ContentFile(webp_bytes))
-        file_url = request.build_absolute_uri(settings.MEDIA_URL + file_name)
+        if is_private:
+            os.makedirs(PRIVATE_EVIDENCE_DIR, exist_ok=True)
+            target_name = f"{int(timezone.now().timestamp())}_{uuid.uuid4().hex[:12]}_{clean_base}.webp"
+            target_path = os.path.join(PRIVATE_EVIDENCE_DIR, target_name)
+            with open(target_path, 'wb') as out_f:
+                out_f.write(webp_bytes)
+            cache.set(f"private_upload_owner_{target_name}", request.user.id, timeout=3600)
+            file_url = request.build_absolute_uri(f"/api/evidence/private/{target_name}")
+        else:
+            target_name = f"{int(timezone.now().timestamp())}_{clean_base}.webp"
+            target_path = os.path.join('uploads', target_name)
+            file_name = default_storage.save(target_path, ContentFile(webp_bytes))
+            file_url = request.build_absolute_uri(settings.MEDIA_URL + file_name)
 
         orig_kb = round(file_obj.size / 1024, 1)
         webp_kb = round(len(webp_bytes) / 1024, 1)
@@ -1059,11 +1226,37 @@ class ImageUploadView(APIView):
 
         return Response({
             'url': file_url,
+            'is_private': is_private,
             'format': 'webp',
             'original_size_kb': orig_kb,
             'compressed_size_kb': webp_kb,
             'compression_ratio': ratio,
         })
+
+
+class PrivateEvidenceFetchView(APIView):
+    """Sirve de forma autenticada una evidencia ciudadana antes o después de asociarse a una alerta."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, filename):
+        target_path = _resolve_private_evidence_path(filename)
+        if not target_path or not os.path.exists(target_path):
+            raise NotFound("Evidencia privada no encontrada.")
+
+        clean_name = os.path.basename(target_path)
+        linked_alert = Alert.objects.filter(
+            Q(image_url__icontains=clean_name) | Q(image_url_2__icontains=clean_name)
+        ).first()
+
+        if linked_alert is not None:
+            if not can_view_private_evidence(request.user, linked_alert):
+                raise PermissionDenied("Solo personal de Serenazgo autorizado puede ver esta evidencia.")
+        else:
+            owner_id = cache.get(f"private_upload_owner_{clean_name}")
+            if not (request.user.is_superuser or is_serenazgo(request.user) or owner_id == request.user.id):
+                raise PermissionDenied("No tienes permisos para ver esta evidencia temporal.")
+
+        return FileResponse(open(target_path, 'rb'), content_type='image/webp')
 
 
 AVAILABLE_GEMINI_MODELS = [
@@ -1526,8 +1719,13 @@ class AnalyzeEvidenceAIView(APIView):
                     elif url_lower.endswith('.jpg') or url_lower.endswith('.jpeg'):
                         mime_type = 'image/jpeg'
 
-                    # 1. Archivo local guardado en MEDIA_ROOT (sin directory traversal)
-                    if 'uploads/' in image_url_str or image_url_str.startswith(settings.MEDIA_URL):
+                    # 1. Archivo local guardado en PRIVATE_EVIDENCE_DIR o MEDIA_ROOT (sin directory traversal)
+                    if '/evidence/private/' in image_url_str:
+                        private_path = _resolve_private_evidence_path(image_url_str)
+                        if private_path and os.path.exists(private_path):
+                            with open(private_path, 'rb') as f:
+                                image_bytes = f.read()
+                    elif 'uploads/' in image_url_str or image_url_str.startswith(settings.MEDIA_URL):
                         clean_filename = os.path.basename(image_url_str.split('?')[0])
                         if clean_filename and not clean_filename.startswith('.'):
                             local_path = os.path.join(settings.MEDIA_ROOT, 'uploads', clean_filename)
@@ -1570,19 +1768,28 @@ class AnalyzeEvidenceAIView(APIView):
         if not image_bytes or len(image_bytes) < 100:
             return Response({'error': 'No se recibió ninguna imagen válida para analizar.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        domain = str(request.data.get('domain') or 'ambiental').strip().lower()
+        if domain not in ('ambiental', 'ciudadana'):
+            domain = 'ambiental'
+
         # -------------------------------------------------------------
-        # CAPA 1: CACHÉ PRE-LLM (Por Hash SHA-256 y por URL)
+        # CAPA 1: CACHÉ PRE-LLM (Por Hash SHA-256 + dominio y por URL)
         # Si la imagen ya fue analizada antes, responder de inmediato
         # con el peritaje guardado sin consumir cuota ni activar cooldowns.
         # -------------------------------------------------------------
         image_hash = hashlib.sha256(image_bytes).hexdigest()
-        cache_hash_key = f"analysis_hash_{image_hash}"
+        cache_hash_key = f"analysis_hash_{domain}_{image_hash}"
         cached_result = cache.get(cache_hash_key)
 
         image_url = request.data.get('image_url')
         if not cached_result and image_url:
-            clean_url = str(image_url).split('uploads/')[-1] if 'uploads/' in str(image_url) else str(image_url).strip()
-            cached_result = cache.get(f"analysis_res_{str(image_url).strip()}") or cache.get(f"analysis_res_{clean_url}")
+            clean_url = (
+                str(image_url).split('uploads/')[-1]
+                if 'uploads/' in str(image_url)
+                else os.path.basename(str(image_url).strip().split('?')[0])
+            )
+            prefix = 'analysis_res_ciudadana_' if domain == 'ciudadana' else 'analysis_res_'
+            cached_result = cache.get(f"{prefix}{str(image_url).strip()}") or cache.get(f"{prefix}{clean_url}")
 
         if cached_result and isinstance(cached_result, dict):
             cached_payload = dict(cached_result)
@@ -1611,7 +1818,41 @@ class AnalyzeEvidenceAIView(APIView):
 
         b64_img = base64.b64encode(image_bytes).decode('utf-8')
 
-        prompt = """Eres un perito ambiental experto del departamento de Pasco, Perú (Cerro de Pasco).
+        if domain == 'ciudadana':
+            prompt = """Eres un analista preventivo de Seguridad Ciudadana y Serenazgo en Cerro de Pasco, Perú.
+Analiza con criterio objetivo y respetuoso esta fotografía enviada de forma privada para Serenazgo.
+Determina si muestra una situación o entorno de riesgo ciudadano (delincuencia/robo, personas ebrias o disturbios, zona oscura/peligrosa) o si es spam/contenido inapropiado.
+
+Debes responder EXCLUSIVAMENTE con un JSON válido con la siguiente estructura exacta:
+{
+  "is_environmental_issue": true,
+  "is_minor_litter": false,
+  "rejection_reason": null,
+  "category": "seguridad",
+  "severity": "medio",
+  "waste_scale": "no_aplica",
+  "suggested_title": "Título conciso y objetivo del incidente (máx 8 palabras)",
+  "suggested_description": "Descripción objetiva sin acusar ni identificar personas por nombre (máx 3 oraciones)",
+  "technical_analysis": "Elementos visuales relevantes para el patrullaje preventivo de Serenazgo",
+  "municipal_action": "Acción preventiva recomendada para Serenazgo"
+}
+
+Opciones para 'category':
+- "seguridad": indicios de robo, vandalismo, vehículo/situación sospechosa, daño a propiedad.
+- "convivencia": consumo de alcohol en vía pública, personas ebrias, alteración del orden, riña o ruidos molestos.
+- "riesgo_urbano": falta de alumbrado público, callejón oscuro, infraestructura insegura o punto vulnerable.
+
+Opciones para 'severity':
+- "critico": riesgo inmediato o delito/agresión en curso.
+- "medio": alteración del orden o riesgo moderado que requiere ronda de Serenazgo.
+- "bajo": situación preventiva o riesgo urbano menor.
+
+REGLAS DE MODERACIÓN:
+- Si la imagen es un meme, dibujo, documento irrelevante o contenido completamente ajeno/inapropiado: marca "rejection_reason": "not_relevant" y "is_environmental_issue": false.
+- En cualquier otro caso válido de seguridad o entorno urbano: marca "rejection_reason": null y "is_environmental_issue": true.
+"""
+        else:
+            prompt = """Eres un perito ambiental experto del departamento de Pasco, Perú (Cerro de Pasco).
 Analiza detalladamente esta fotografía tomada por un ciudadano o brigada municipal.
 Determina con rigor técnico si la imagen muestra una infracción o problema de contaminación ambiental REAL en Cerro de Pasco.
 
@@ -1728,27 +1969,42 @@ REGLAS CRÍTICAS DE EVALUACIÓN Y FILTRADO:
                                 clean_text = re.sub(r'\s*```$', '', clean_text)
                             parsed = json.loads(clean_text)
 
-                            # Normalizar categorías
+                            # Normalizar categorías según dominio
                             raw_cat = str(parsed.get('category', '')).lower()
-                            if any(k in raw_cat for k in ['desmonte', 'residuo', 'basura', 'plastic', 'escomb']):
-                                parsed['category'] = 'basura'
-                            elif any(k in raw_cat for k in ['miner', 'relave', 'tajo']):
-                                parsed['category'] = 'mineria'
-                            elif any(k in raw_cat for k in ['agua', 'rio', 'lagun', 'desag']):
-                                parsed['category'] = 'agua'
-                            elif any(k in raw_cat for k in ['aire', 'humo', 'quem']):
-                                parsed['category'] = 'aire'
+                            if domain == 'ciudadana':
+                                if any(k in raw_cat for k in ['segur', 'robo', 'delin', 'vandal', 'asalto']):
+                                    parsed['category'] = 'seguridad'
+                                elif any(k in raw_cat for k in ['conviv', 'ebri', 'disturb', 'alcohol', 'riña', 'ruido']):
+                                    parsed['category'] = 'convivencia'
+                                elif any(k in raw_cat for k in ['riesg', 'oscur', 'alumbr', 'peligr']):
+                                    parsed['category'] = 'riesgo_urbano'
+                                elif parsed.get('category') not in Alert.CITIZEN_CATEGORIES:
+                                    parsed['category'] = 'seguridad'
+                                parsed['domain'] = 'ciudadana'
+                            else:
+                                if any(k in raw_cat for k in ['desmonte', 'residuo', 'basura', 'plastic', 'escomb']):
+                                    parsed['category'] = 'basura'
+                                elif any(k in raw_cat for k in ['miner', 'relave', 'tajo']):
+                                    parsed['category'] = 'mineria'
+                                elif any(k in raw_cat for k in ['agua', 'rio', 'lagun', 'desag']):
+                                    parsed['category'] = 'agua'
+                                elif any(k in raw_cat for k in ['aire', 'humo', 'quem']):
+                                    parsed['category'] = 'aire'
+                                parsed['domain'] = 'ambiental'
 
                             # -------------------------------------------------------------
                             # CAPA 3: GUARDADO EN CACHÉ DE LARGA DURACIÓN (24 Horas)
-                            # Permite responder de inmediato si cualquier usuario o vista
-                            # vuelve a pedir el análisis de esta misma imagen.
                             # -------------------------------------------------------------
                             cache.set(cache_hash_key, parsed, timeout=86400)
                             if image_url:
-                                clean_url = str(image_url).split('uploads/')[-1] if 'uploads/' in str(image_url) else str(image_url).strip()
-                                cache.set(f"analysis_res_{str(image_url).strip()}", parsed, timeout=86400)
-                                cache.set(f"analysis_res_{clean_url}", parsed, timeout=86400)
+                                clean_url = (
+                                    str(image_url).split('uploads/')[-1]
+                                    if 'uploads/' in str(image_url)
+                                    else os.path.basename(str(image_url).strip().split('?')[0])
+                                )
+                                prefix = 'analysis_res_ciudadana_' if domain == 'ciudadana' else 'analysis_res_'
+                                cache.set(f"{prefix}{str(image_url).strip()}", parsed, timeout=86400)
+                                cache.set(f"{prefix}{clean_url}", parsed, timeout=86400)
 
                             # Mantener cooldown activo durante 12 segundos tras éxito
                             cache.set(cooldown_key, True, timeout=12)
@@ -1770,9 +2026,6 @@ REGLAS CRÍTICAS DE EVALUACIÓN Y FILTRADO:
 
             if last_error and '15 req/min' in last_error:
                 return Response({'error': last_error}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-            return Response({'error': last_error or 'No se pudo procesar la imagen con los modelos disponibles.'}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response({'error': f'Error en el análisis de Gemini: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             return Response({'error': last_error or 'No se pudo procesar la imagen con los modelos disponibles.'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': f'Error en el análisis de Gemini: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1836,7 +2089,9 @@ class UserProfileView(APIView):
             "username": user.username,
             "email": user.email,
             "is_staff": user.is_staff,
+            "is_superuser": user.is_superuser,
             "is_collector": is_collector(user),
+            "is_serenazgo": is_serenazgo(user),
             "eco_points": eco_points,
             "rank": rank,
             "level": level,
@@ -1859,6 +2114,9 @@ class PublicAlertVerificationView(APIView):
             alert = Alert.objects.get(pk=pk)
         except Alert.DoesNotExist:
             return Response({'error': 'Expediente no encontrado o código de verificación inválido.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if alert.domain == 'ciudadana' or alert.hide_media_public:
+            return Response({'error': 'Las incidencias reservadas de Seguridad Ciudadana no generan acta pública ambiental.'}, status=status.HTTP_404_NOT_FOUND)
 
         raw_hash_data = f"{alert.id}:{alert.created_at.isoformat()}:{alert.status}:{alert.latitude}:{alert.longitude}:{alert.title}"
         verification_hash = hashlib.sha256(raw_hash_data.encode()).hexdigest()[:16].upper()

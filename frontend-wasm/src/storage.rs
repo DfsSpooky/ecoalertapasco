@@ -5,7 +5,9 @@ use crate::models::AuthUser;
 const KEY_TOKEN: &str = "eco_auth_token";
 const KEY_USERNAME: &str = "eco_auth_username";
 const KEY_IS_STAFF: &str = "eco_auth_is_staff";
+const KEY_IS_SUPERUSER: &str = "eco_auth_is_superuser";
 const KEY_IS_COLLECTOR: &str = "eco_auth_is_collector";
+const KEY_IS_SERENAZGO: &str = "eco_auth_is_serenazgo";
 const KEY_EMAIL: &str = "eco_auth_email";
 const KEY_PHOTO_URL: &str = "eco_auth_photo_url";
 const KEY_FULL_NAME: &str = "eco_auth_full_name";
@@ -43,7 +45,9 @@ pub fn load_remembered_google_user() -> Option<AuthUser> {
             username,
             email,
             is_staff: false,
+            is_superuser: false,
             is_collector: false,
+            is_serenazgo: false,
             photo_url,
             full_name,
         })
@@ -66,7 +70,9 @@ pub fn save_auth_session(user: &AuthUser) {
             let _ = storage.set_item(KEY_TOKEN, &user.token);
             let _ = storage.set_item(KEY_USERNAME, &user.username);
             let _ = storage.set_item(KEY_IS_STAFF, if user.is_staff { "true" } else { "false" });
+            let _ = storage.set_item(KEY_IS_SUPERUSER, if user.is_superuser { "true" } else { "false" });
             let _ = storage.set_item(KEY_IS_COLLECTOR, if user.is_collector { "true" } else { "false" });
+            let _ = storage.set_item(KEY_IS_SERENAZGO, if user.is_serenazgo { "true" } else { "false" });
             if let Some(ref email) = user.email {
                 let _ = storage.set_item(KEY_EMAIL, email);
             }
@@ -100,8 +106,20 @@ pub fn load_auth_session() -> Option<AuthUser> {
         .ok()?
         .map(|v| v == "true")
         .unwrap_or(false);
+    let is_superuser = storage
+        .get_item(KEY_IS_SUPERUSER)
+        .ok()
+        .flatten()
+        .map(|v| v == "true")
+        .unwrap_or(false);
     let is_collector = storage
         .get_item(KEY_IS_COLLECTOR)
+        .ok()
+        .flatten()
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    let is_serenazgo = storage
+        .get_item(KEY_IS_SERENAZGO)
         .ok()
         .flatten()
         .map(|v| v == "true")
@@ -115,7 +133,9 @@ pub fn load_auth_session() -> Option<AuthUser> {
         username,
         email,
         is_staff,
+        is_superuser,
         is_collector,
+        is_serenazgo,
         photo_url,
         full_name,
     })
@@ -127,7 +147,9 @@ pub fn clear_auth_session() {
             let _ = storage.remove_item(KEY_TOKEN);
             let _ = storage.remove_item(KEY_USERNAME);
             let _ = storage.remove_item(KEY_IS_STAFF);
+            let _ = storage.remove_item(KEY_IS_SUPERUSER);
             let _ = storage.remove_item(KEY_IS_COLLECTOR);
+            let _ = storage.remove_item(KEY_IS_SERENAZGO);
             let _ = storage.remove_item(KEY_EMAIL);
             let _ = storage.remove_item(KEY_PHOTO_URL);
             let _ = storage.remove_item(KEY_FULL_NAME);

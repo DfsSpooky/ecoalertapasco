@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlparse
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
@@ -81,7 +82,12 @@ def build_map_snapshot(user_id: int | None) -> dict:
             )
         )
 
-    alerts_qs = Alert.objects.select_related("reported_by").order_by("-created_at")
+    now = timezone.now()
+    alerts_qs = (
+        Alert.objects.select_related("reported_by")
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+        .order_by("-created_at")
+    )
     waste_qs = WastePoint.objects.all().order_by("id")
 
     alerts_data = AlertSerializer(

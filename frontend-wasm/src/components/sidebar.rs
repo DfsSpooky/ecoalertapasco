@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 use leptos::*;
-use crate::models::{AuthUser, EcoAlert, EcoCategory, EcoDistrict, EcoSeverity, SyncStatus};
+use crate::models::{AlertDomain, AuthUser, EcoAlert, EcoCategory, EcoDistrict, EcoSeverity, SyncStatus};
 
 #[component]
 pub fn Sidebar(
+    active_domain: RwSignal<AlertDomain>,
     alerts: RwSignal<Vec<EcoAlert>>,
     filtered_alerts: Memo<Vec<EcoAlert>>,
     selected_categories: RwSignal<HashSet<EcoCategory>>,
@@ -51,18 +52,27 @@ pub fn Sidebar(
         });
     };
 
-    let total_count = move || alerts.get().len();
+    let domain_alerts = create_memo(move |_| {
+        let dom = active_domain.get();
+        alerts
+            .get()
+            .into_iter()
+            .filter(|a| a.category.domain() == dom && !a.is_expired())
+            .collect::<Vec<EcoAlert>>()
+    });
+
+    let total_count = move || domain_alerts.get().len();
     let filtered_count = move || filtered_alerts.get().len();
-    let solved_count = move || alerts.get().iter().filter(|a| a.status == "solved").count();
+    let solved_count = move || domain_alerts.get().iter().filter(|a| a.status == "solved").count();
 
     let critical_count = move || {
-        alerts.get().iter().filter(|a| a.severity == EcoSeverity::Critico).count()
+        domain_alerts.get().iter().filter(|a| a.severity == EcoSeverity::Critico).count()
     };
     let medium_count = move || {
-        alerts.get().iter().filter(|a| a.severity == EcoSeverity::Medio).count()
+        domain_alerts.get().iter().filter(|a| a.severity == EcoSeverity::Medio).count()
     };
     let low_count = move || {
-        alerts.get().iter().filter(|a| a.severity == EcoSeverity::Bajo).count()
+        domain_alerts.get().iter().filter(|a| a.severity == EcoSeverity::Bajo).count()
     };
 
     let critical_percent = move || {
@@ -79,15 +89,23 @@ pub fn Sidebar(
     };
 
     // Category counts and percentages for Donut Chart
-    let mineria_count = move || alerts.get().iter().filter(|a| a.category == EcoCategory::Mineria).count();
-    let basura_count = move || alerts.get().iter().filter(|a| a.category == EcoCategory::Basura).count();
-    let agua_count = move || alerts.get().iter().filter(|a| a.category == EcoCategory::Agua).count();
-    let aire_count = move || alerts.get().iter().filter(|a| a.category == EcoCategory::Aire).count();
+    let mineria_count = move || domain_alerts.get().iter().filter(|a| a.category == EcoCategory::Mineria).count();
+    let basura_count = move || domain_alerts.get().iter().filter(|a| a.category == EcoCategory::Basura).count();
+    let agua_count = move || domain_alerts.get().iter().filter(|a| a.category == EcoCategory::Agua).count();
+    let aire_count = move || domain_alerts.get().iter().filter(|a| a.category == EcoCategory::Aire).count();
+
+    let seguridad_count = move || domain_alerts.get().iter().filter(|a| a.category == EcoCategory::Seguridad).count();
+    let convivencia_count = move || domain_alerts.get().iter().filter(|a| a.category == EcoCategory::Convivencia).count();
+    let riesgo_count = move || domain_alerts.get().iter().filter(|a| a.category == EcoCategory::RiesgoUrbano).count();
 
     let mineria_pct = move || { let t = total_count(); if t == 0 { 0.0 } else { (mineria_count() as f64 * 100.0) / t as f64 } };
     let basura_pct = move || { let t = total_count(); if t == 0 { 0.0 } else { (basura_count() as f64 * 100.0) / t as f64 } };
     let agua_pct = move || { let t = total_count(); if t == 0 { 0.0 } else { (agua_count() as f64 * 100.0) / t as f64 } };
     let aire_pct = move || { let t = total_count(); if t == 0 { 0.0 } else { (aire_count() as f64 * 100.0) / t as f64 } };
+
+    let seguridad_pct = move || { let t = total_count(); if t == 0 { 0.0 } else { (seguridad_count() as f64 * 100.0) / t as f64 } };
+    let convivencia_pct = move || { let t = total_count(); if t == 0 { 0.0 } else { (convivencia_count() as f64 * 100.0) / t as f64 } };
+    let riesgo_pct = move || { let t = total_count(); if t == 0 { 0.0 } else { (riesgo_count() as f64 * 100.0) / t as f64 } };
 
     view! {
         // Mobile Backdrop Overlay for off-canvas drawer
@@ -100,20 +118,61 @@ pub fn Sidebar(
 
         // Floating pill button to re-open sidebar when collapsed on desktop (Google Maps style)
         {move || is_collapsed.get().then(|| view! {
-            <button
-                class="hidden md:flex fixed top-3.5 left-3.5 z-30 bg-white/95 backdrop-blur-md pl-3 pr-3.5 py-2 rounded-xl shadow-[0_4px_16px_rgba(60,64,67,0.18)] border border-slate-200/90 text-slate-800 hover:bg-white hover:text-emerald-700 items-center space-x-2 text-xs font-semibold transition hover:scale-[1.02] animate-in fade-in duration-200 cursor-pointer"
-                on:click=move |_| is_collapsed.set(false)
-                title="Mostrar panel de EcoAlerta"
-            >
-                <div class="w-5 h-5 rounded-lg bg-emerald-600 text-white flex items-center justify-center text-[11px] shadow-2xs">
-                    "🌿"
+            <div class="hidden md:flex fixed top-3.5 left-3.5 z-30 items-center gap-2 animate-in fade-in duration-200">
+                <button
+                    class="bg-white/95 backdrop-blur-md pl-3 pr-3.5 py-2 rounded-xl shadow-[0_4px_16px_rgba(60,64,67,0.18)] border border-slate-200/90 text-slate-800 hover:bg-white hover:text-emerald-700 flex items-center space-x-2 text-xs font-semibold transition hover:scale-[1.02] cursor-pointer"
+                    on:click=move |_| is_collapsed.set(false)
+                    title="Mostrar panel lateral"
+                >
+                    <div class=move || {
+                        if active_domain.get() == AlertDomain::Ciudadana {
+                            "w-5 h-5 rounded-lg bg-indigo-600 text-white flex items-center justify-center text-[11px] shadow-2xs"
+                        } else {
+                            "w-5 h-5 rounded-lg bg-emerald-600 text-white flex items-center justify-center text-[11px] shadow-2xs"
+                        }
+                    }>
+                        {move || if active_domain.get() == AlertDomain::Ciudadana { "🛡️" } else { "🌿" }}
+                    </div>
+                    <span class="font-bold tracking-tight">
+                        {move || if active_domain.get() == AlertDomain::Ciudadana { "Pasco Seguro" } else { "EcoAlerta" }}
+                    </span>
+                    <span class="px-1.5 py-0.5 rounded-md bg-slate-100 text-[10px] text-slate-700 border border-slate-200 font-mono font-bold">
+                        {move || format!("{}", filtered_count())}
+                    </span>
+                    <i class="fa-solid fa-chevron-right text-slate-400 text-xs"></i>
+                </button>
+
+                // Switch etiquetado visible cuando el sidebar está colapsado en desktop
+                <div class="bg-white/95 backdrop-blur-md rounded-xl shadow-[0_4px_16px_rgba(60,64,67,0.16)] border border-slate-200/90 px-2 py-1 flex items-center gap-1.5">
+                    <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 pl-1">"Mapa:"</span>
+                    <button
+                        class=move || {
+                            if active_domain.get() == AlertDomain::Ambiental {
+                                "px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-600 text-white shadow-2xs transition cursor-pointer flex items-center space-x-1"
+                            } else {
+                                "px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer flex items-center space-x-1"
+                            }
+                        }
+                        on:click=move |_| active_domain.set(AlertDomain::Ambiental)
+                    >
+                        <span>"🌱"</span>
+                        <span>"Ambiental"</span>
+                    </button>
+                    <button
+                        class=move || {
+                            if active_domain.get() == AlertDomain::Ciudadana {
+                                "px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-600 text-white shadow-2xs transition cursor-pointer flex items-center space-x-1"
+                            } else {
+                                "px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer flex items-center space-x-1"
+                            }
+                        }
+                        on:click=move |_| active_domain.set(AlertDomain::Ciudadana)
+                    >
+                        <span>"🛡️"</span>
+                        <span>"Seguridad"</span>
+                    </button>
                 </div>
-                <span class="font-bold tracking-tight">"EcoAlerta"</span>
-                <span class="px-1.5 py-0.5 rounded-md bg-emerald-50 text-[10px] text-emerald-700 border border-emerald-100 font-mono font-bold">
-                    {move || format!("{}", filtered_count())}
-                </span>
-                <i class="fa-solid fa-chevron-right text-slate-400 text-xs"></i>
-            </button>
+            </div>
         })}
 
         // Main Sidebar Container: Responsive off-canvas drawer on mobile, collapsible panel on desktop
@@ -147,12 +206,16 @@ pub fn Sidebar(
                     </div>
                     <div class="min-w-0 flex-1">
                         <div class="flex items-center space-x-1.5">
-                            <h1 class="text-[15px] font-extrabold text-slate-900 tracking-tight leading-none truncate">"EcoAlerta"</h1>
+                            <h1 class="text-[15px] font-extrabold text-slate-900 tracking-tight leading-none truncate">
+                                {move || if active_domain.get() == AlertDomain::Ciudadana { "Pasco Seguro" } else { "EcoAlerta" }}
+                            </h1>
                             <span class="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200/80 shrink-0">
                                 "Pasco"
                             </span>
                         </div>
-                        <p class="text-[10.5px] text-slate-400 font-medium truncate mt-0.5">"Monitoreo Ambiental Activo"</p>
+                        <p class="text-[10.5px] text-slate-400 font-medium truncate mt-0.5">
+                            {move || if active_domain.get() == AlertDomain::Ciudadana { "Mapa Ciudadano · Alertas 6h" } else { "Monitoreo Ambiental Activo" }}
+                        </p>
                     </div>
                 </div>
 
@@ -193,7 +256,18 @@ pub fn Sidebar(
             // User Session Banner (shown when user is authenticated)
             {move || current_user.get().map(|user| {
                 let initial = user.username.chars().next().unwrap_or('U').to_uppercase().to_string();
-                let is_staff = user.is_staff;
+                let is_auth = user.is_authority();
+                let is_sereno_only = user.is_serenazgo && !user.is_staff && !user.is_superuser;
+                let badge_label = if user.is_superuser {
+                    "Superadmin"
+                } else if is_sereno_only {
+                    "Serenazgo"
+                } else if user.is_staff {
+                    "Autoridad"
+                } else {
+                    "Ciudadano"
+                };
+                let subtitle_label = user.role_label();
                 let photo = user.photo_url.clone();
                 let display_title = user.display_name();
                 view! {
@@ -216,7 +290,7 @@ pub fn Sidebar(
                                     _ => view! {
                                         <div class=format!(
                                             "w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold text-white shadow-2xs {}",
-                                            if is_staff { "bg-emerald-600" } else { "bg-slate-800" }
+                                            if is_sereno_only { "bg-indigo-600" } else if is_auth { "bg-emerald-600" } else { "bg-slate-800" }
                                         )>
                                             {initial}
                                         </div>
@@ -229,22 +303,28 @@ pub fn Sidebar(
                                     <span class="font-bold text-slate-800 text-xs truncate max-w-[120px] sm:max-w-[140px]">
                                         {display_title}
                                     </span>
-                                    {if is_staff {
+                                    {if is_sereno_only {
+                                        view! {
+                                            <span class="px-1.5 py-0.2 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 text-[9px] font-bold uppercase tracking-wider shrink-0">
+                                                {badge_label}
+                                            </span>
+                                        }.into_view()
+                                    } else if is_auth {
                                         view! {
                                             <span class="px-1.5 py-0.2 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[9px] font-bold uppercase tracking-wider shrink-0">
-                                                "Autoridad"
+                                                {badge_label}
                                             </span>
                                         }.into_view()
                                     } else {
                                         view! {
                                             <span class="px-1.5 py-0.2 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9px] font-bold uppercase tracking-wider shrink-0">
-                                                "Ciudadano"
+                                                {badge_label}
                                             </span>
                                         }.into_view()
                                     }}
                                 </div>
                                 <p class="text-[10px] text-slate-400 font-medium truncate">
-                                    {if is_staff { "Fiscalizador Ambiental" } else { "Participación Activa" }}
+                                    {subtitle_label}
                                 </p>
                             </div>
                         </button>
@@ -272,6 +352,50 @@ pub fn Sidebar(
                     </div>
                 }
             })}
+
+            // 1.5 Switch Dedicado de Mapa Apartado (Siempre visible en Sidebar)
+            <div class="px-3.5 pt-2.5 pb-1">
+                <div class="bg-slate-100/90 border border-slate-200/80 rounded-2xl p-1.5 space-y-1">
+                    <div class="flex items-center justify-between px-1">
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                            "Modo de Mapa"
+                        </span>
+                        <span class="text-[10px] font-semibold text-slate-400">
+                            {move || if active_domain.get() == AlertDomain::Ciudadana { "Efímero 6h · Anónimo" } else { "Fiscalización" }}
+                        </span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-1">
+                        <button
+                            type="button"
+                            class=move || {
+                                if active_domain.get() == AlertDomain::Ambiental {
+                                    "py-1.5 px-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold shadow-xs flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                                } else {
+                                    "py-1.5 px-2.5 rounded-xl bg-white/70 hover:bg-white text-slate-600 text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                                }
+                            }
+                            on:click=move |_| active_domain.set(AlertDomain::Ambiental)
+                        >
+                            <span>"🌱"</span>
+                            <span>"Ambiental"</span>
+                        </button>
+                        <button
+                            type="button"
+                            class=move || {
+                                if active_domain.get() == AlertDomain::Ciudadana {
+                                    "py-1.5 px-2.5 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-xs flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                                } else {
+                                    "py-1.5 px-2.5 rounded-xl bg-white/70 hover:bg-white text-slate-600 text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                                }
+                            }
+                            on:click=move |_| active_domain.set(AlertDomain::Ciudadana)
+                        >
+                            <span>"🛡️"</span>
+                            <span>"Seguridad"</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
 
             // 2. Google Maps Search Bar
             <div class="px-3.5 pt-2.5 pb-2">
@@ -333,23 +457,25 @@ pub fn Sidebar(
                     }}
                 </button>
 
-                // Transparency Portal Chip
-                <button
-                    class=move || {
-                        if show_transparency_portal.get() {
-                            "bg-emerald-700 text-white rounded-xl font-semibold px-3 py-1.5 text-xs shadow-xs flex items-center space-x-1.5 shrink-0 transition cursor-pointer"
-                        } else {
-                            "bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 rounded-xl border border-slate-200/80 font-semibold px-3 py-1.5 text-xs flex items-center space-x-1.5 shrink-0 transition cursor-pointer"
+                // Transparency Portal Chip (solo en Mapa Ambiental)
+                {move || (active_domain.get() == AlertDomain::Ambiental).then(|| view! {
+                    <button
+                        class=move || {
+                            if show_transparency_portal.get() {
+                                "bg-emerald-700 text-white rounded-xl font-semibold px-3 py-1.5 text-xs shadow-xs flex items-center space-x-1.5 shrink-0 transition cursor-pointer"
+                            } else {
+                                "bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 rounded-xl border border-slate-200/80 font-semibold px-3 py-1.5 text-xs flex items-center space-x-1.5 shrink-0 transition cursor-pointer"
+                            }
                         }
-                    }
-                    on:click=move |_| show_transparency_portal.update(|v| *v = !*v)
-                >
-                    <span>"🏆"</span>
-                    <span>"Transparencia"</span>
-                    <span class="px-1.5 py-0.2 rounded-md text-[10px] bg-emerald-100 text-emerald-800 font-bold font-mono">
-                        {move || format!("{}", solved_count())}
-                    </span>
-                </button>
+                        on:click=move |_| show_transparency_portal.update(|v| *v = !*v)
+                    >
+                        <span>"🏆"</span>
+                        <span>"Transparencia"</span>
+                        <span class="px-1.5 py-0.2 rounded-md text-[10px] bg-emerald-100 text-emerald-800 font-bold font-mono">
+                            {move || format!("{}", solved_count())}
+                        </span>
+                    </button>
+                })}
 
                 // Authority Dashboard Chip (Restricted exclusively to authorized staff)
                 {move || {
@@ -421,100 +547,151 @@ pub fn Sidebar(
                     </div>
 
                     {move || show_charts.get().then(|| view! {
-                        <div class="flex items-center space-x-3 pt-1">
-                            // SVG Donut
-                            <div class="relative w-24 h-24 shrink-0">
-                                <svg class="w-full h-full transform -rotate-90" viewBox="0 0 42 42">
-                                    // Background Circle
-                                    <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#e2e8f0" stroke-width="6.5"></circle>
-
-                                    // Minería Segment (Amber)
-                                    <circle
-                                        cx="21" cy="21" r="15.91549430918954" fill="transparent"
-                                        stroke="#d97706" stroke-width="6.5"
-                                        stroke-dasharray=move || format!("{} {}", mineria_pct(), 100.0 - mineria_pct())
-                                        stroke-dashoffset="0"
-                                        class="transition-all duration-500"
-                                    ></circle>
-
-                                    // Basura Segment (Slate/Green)
-                                    <circle
-                                        cx="21" cy="21" r="15.91549430918954" fill="transparent"
-                                        stroke="#059669" stroke-width="6.5"
-                                        stroke-dasharray=move || format!("{} {}", basura_pct(), 100.0 - basura_pct())
-                                        stroke-dashoffset=move || format!("-{}", mineria_pct())
-                                        class="transition-all duration-500"
-                                    ></circle>
-
-                                    // Agua Segment (Sky)
-                                    <circle
-                                        cx="21" cy="21" r="15.91549430918954" fill="transparent"
-                                        stroke="#0284c7" stroke-width="6.5"
-                                        stroke-dasharray=move || format!("{} {}", agua_pct(), 100.0 - agua_pct())
-                                        stroke-dashoffset=move || format!("-{}", mineria_pct() + basura_pct())
-                                        class="transition-all duration-500"
-                                    ></circle>
-
-                                    // Aire Segment (Purple)
-                                    <circle
-                                        cx="21" cy="21" r="15.91549430918954" fill="transparent"
-                                        stroke="#7c3aed" stroke-width="6.5"
-                                        stroke-dasharray=move || format!("{} {}", aire_pct(), 100.0 - aire_pct())
-                                        stroke-dashoffset=move || format!("-{}", mineria_pct() + basura_pct() + agua_pct())
-                                        class="transition-all duration-500"
-                                    ></circle>
-                                </svg>
-                                // Center Label
-                                <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                                    <span class="text-sm font-black text-slate-900 leading-tight">
-                                        {move || total_count()}
-                                    </span>
-                                    <span class="text-[8px] text-slate-400 uppercase font-bold tracking-wider">
-                                        "TOTAL"
-                                    </span>
+                        {move || if active_domain.get() == AlertDomain::Ciudadana {
+                            view! {
+                                <div class="flex items-center space-x-3 pt-1">
+                                    <div class="relative w-24 h-24 shrink-0">
+                                        <svg class="w-full h-full transform -rotate-90" viewBox="0 0 42 42">
+                                            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#e2e8f0" stroke-width="6.5"></circle>
+                                            <circle
+                                                cx="21" cy="21" r="15.91549430918954" fill="transparent"
+                                                stroke="#4f46e5" stroke-width="6.5"
+                                                stroke-dasharray=move || format!("{} {}", seguridad_pct(), 100.0 - seguridad_pct())
+                                                stroke-dashoffset="0"
+                                                class="transition-all duration-500"
+                                            ></circle>
+                                            <circle
+                                                cx="21" cy="21" r="15.91549430918954" fill="transparent"
+                                                stroke="#ea580c" stroke-width="6.5"
+                                                stroke-dasharray=move || format!("{} {}", convivencia_pct(), 100.0 - convivencia_pct())
+                                                stroke-dashoffset=move || format!("-{}", seguridad_pct())
+                                                class="transition-all duration-500"
+                                            ></circle>
+                                            <circle
+                                                cx="21" cy="21" r="15.91549430918954" fill="transparent"
+                                                stroke="#334155" stroke-width="6.5"
+                                                stroke-dasharray=move || format!("{} {}", riesgo_pct(), 100.0 - riesgo_pct())
+                                                stroke-dashoffset=move || format!("-{}", seguridad_pct() + convivencia_pct())
+                                                class="transition-all duration-500"
+                                            ></circle>
+                                        </svg>
+                                        <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                                            <span class="text-sm font-black text-slate-900 leading-tight">{move || total_count()}</span>
+                                            <span class="text-[8px] text-slate-400 uppercase font-bold tracking-wider">"ACTIVOS"</span>
+                                        </div>
+                                    </div>
+                                    <div class="flex-1 space-y-1.5 text-xs min-w-0">
+                                        <div class="flex items-center justify-between text-slate-700">
+                                            <span class="flex items-center space-x-1.5 truncate">
+                                                <span class="w-2 h-2 rounded-full bg-indigo-600 shrink-0"></span>
+                                                <span class="font-medium text-slate-700">"Delincuencia"</span>
+                                            </span>
+                                            <span class="font-bold text-slate-900 font-mono text-[11px]">
+                                                {move || format!("{} ({:.0}%)", seguridad_count(), seguridad_pct())}
+                                            </span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700">
+                                            <span class="flex items-center space-x-1.5 truncate">
+                                                <span class="w-2 h-2 rounded-full bg-orange-600 shrink-0"></span>
+                                                <span class="font-medium text-slate-700">"Ebrios / Orden"</span>
+                                            </span>
+                                            <span class="font-bold text-slate-900 font-mono text-[11px]">
+                                                {move || format!("{} ({:.0}%)", convivencia_count(), convivencia_pct())}
+                                            </span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700">
+                                            <span class="flex items-center space-x-1.5 truncate">
+                                                <span class="w-2 h-2 rounded-full bg-slate-700 shrink-0"></span>
+                                                <span class="font-medium text-slate-700">"Zona Oscura"</span>
+                                            </span>
+                                            <span class="font-bold text-slate-900 font-mono text-[11px]">
+                                                {move || format!("{} ({:.0}%)", riesgo_count(), riesgo_pct())}
+                                            </span>
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-
-                            // Legend List
-                            <div class="flex-1 space-y-1.5 text-xs min-w-0">
-                                <div class="flex items-center justify-between text-slate-700">
-                                    <span class="flex items-center space-x-1.5 truncate">
-                                        <span class="w-2 h-2 rounded-full bg-amber-600 shrink-0"></span>
-                                        <span class="font-medium text-slate-700">"Minería"</span>
-                                    </span>
-                                    <span class="font-bold text-slate-900 font-mono text-[11px]">
-                                        {move || format!("{} ({:.0}%)", mineria_count(), mineria_pct())}
-                                    </span>
+                            }.into_view()
+                        } else {
+                            view! {
+                                <div class="flex items-center space-x-3 pt-1">
+                                    <div class="relative w-24 h-24 shrink-0">
+                                        <svg class="w-full h-full transform -rotate-90" viewBox="0 0 42 42">
+                                            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#e2e8f0" stroke-width="6.5"></circle>
+                                            <circle
+                                                cx="21" cy="21" r="15.91549430918954" fill="transparent"
+                                                stroke="#d97706" stroke-width="6.5"
+                                                stroke-dasharray=move || format!("{} {}", mineria_pct(), 100.0 - mineria_pct())
+                                                stroke-dashoffset="0"
+                                                class="transition-all duration-500"
+                                            ></circle>
+                                            <circle
+                                                cx="21" cy="21" r="15.91549430918954" fill="transparent"
+                                                stroke="#059669" stroke-width="6.5"
+                                                stroke-dasharray=move || format!("{} {}", basura_pct(), 100.0 - basura_pct())
+                                                stroke-dashoffset=move || format!("-{}", mineria_pct())
+                                                class="transition-all duration-500"
+                                            ></circle>
+                                            <circle
+                                                cx="21" cy="21" r="15.91549430918954" fill="transparent"
+                                                stroke="#0284c7" stroke-width="6.5"
+                                                stroke-dasharray=move || format!("{} {}", agua_pct(), 100.0 - agua_pct())
+                                                stroke-dashoffset=move || format!("-{}", mineria_pct() + basura_pct())
+                                                class="transition-all duration-500"
+                                            ></circle>
+                                            <circle
+                                                cx="21" cy="21" r="15.91549430918954" fill="transparent"
+                                                stroke="#7c3aed" stroke-width="6.5"
+                                                stroke-dasharray=move || format!("{} {}", aire_pct(), 100.0 - aire_pct())
+                                                stroke-dashoffset=move || format!("-{}", mineria_pct() + basura_pct() + agua_pct())
+                                                class="transition-all duration-500"
+                                            ></circle>
+                                        </svg>
+                                        <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                                            <span class="text-sm font-black text-slate-900 leading-tight">{move || total_count()}</span>
+                                            <span class="text-[8px] text-slate-400 uppercase font-bold tracking-wider">"TOTAL"</span>
+                                        </div>
+                                    </div>
+                                    <div class="flex-1 space-y-1.5 text-xs min-w-0">
+                                        <div class="flex items-center justify-between text-slate-700">
+                                            <span class="flex items-center space-x-1.5 truncate">
+                                                <span class="w-2 h-2 rounded-full bg-amber-600 shrink-0"></span>
+                                                <span class="font-medium text-slate-700">"Minería"</span>
+                                            </span>
+                                            <span class="font-bold text-slate-900 font-mono text-[11px]">
+                                                {move || format!("{} ({:.0}%)", mineria_count(), mineria_pct())}
+                                            </span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700">
+                                            <span class="flex items-center space-x-1.5 truncate">
+                                                <span class="w-2 h-2 rounded-full bg-emerald-600 shrink-0"></span>
+                                                <span class="font-medium text-slate-700">"Residuos"</span>
+                                            </span>
+                                            <span class="font-bold text-slate-900 font-mono text-[11px]">
+                                                {move || format!("{} ({:.0}%)", basura_count(), basura_pct())}
+                                            </span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700">
+                                            <span class="flex items-center space-x-1.5 truncate">
+                                                <span class="w-2 h-2 rounded-full bg-sky-600 shrink-0"></span>
+                                                <span class="font-medium text-slate-700">"Agua"</span>
+                                            </span>
+                                            <span class="font-bold text-slate-900 font-mono text-[11px]">
+                                                {move || format!("{} ({:.0}%)", agua_count(), agua_pct())}
+                                            </span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700">
+                                            <span class="flex items-center space-x-1.5 truncate">
+                                                <span class="w-2 h-2 rounded-full bg-purple-600 shrink-0"></span>
+                                                <span class="font-medium text-slate-700">"Aire"</span>
+                                            </span>
+                                            <span class="font-bold text-slate-900 font-mono text-[11px]">
+                                                {move || format!("{} ({:.0}%)", aire_count(), aire_pct())}
+                                            </span>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div class="flex items-center justify-between text-slate-700">
-                                    <span class="flex items-center space-x-1.5 truncate">
-                                        <span class="w-2 h-2 rounded-full bg-emerald-600 shrink-0"></span>
-                                        <span class="font-medium text-slate-700">"Residuos"</span>
-                                    </span>
-                                    <span class="font-bold text-slate-900 font-mono text-[11px]">
-                                        {move || format!("{} ({:.0}%)", basura_count(), basura_pct())}
-                                    </span>
-                                </div>
-                                <div class="flex items-center justify-between text-slate-700">
-                                    <span class="flex items-center space-x-1.5 truncate">
-                                        <span class="w-2 h-2 rounded-full bg-sky-600 shrink-0"></span>
-                                        <span class="font-medium text-slate-700">"Agua"</span>
-                                    </span>
-                                    <span class="font-bold text-slate-900 font-mono text-[11px]">
-                                        {move || format!("{} ({:.0}%)", agua_count(), agua_pct())}
-                                    </span>
-                                </div>
-                                <div class="flex items-center justify-between text-slate-700">
-                                    <span class="flex items-center space-x-1.5 truncate">
-                                        <span class="w-2 h-2 rounded-full bg-purple-600 shrink-0"></span>
-                                        <span class="font-medium text-slate-700">"Aire"</span>
-                                    </span>
-                                    <span class="font-bold text-slate-900 font-mono text-[11px]">
-                                        {move || format!("{} ({:.0}%)", aire_count(), aire_pct())}
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
+                            }.into_view()
+                        }}
                     })}
                 </div>
 
@@ -665,7 +842,7 @@ pub fn Sidebar(
                         "Categoría de Impacto"
                     </span>
                     <div class="grid grid-cols-2 gap-2">
-                        {EcoCategory::all().iter().map(|&cat| {
+                        {move || EcoCategory::for_domain(active_domain.get()).iter().map(|&cat| {
                             let is_selected = move || selected_categories.get().contains(&cat);
                             view! {
                                 <button
@@ -678,6 +855,9 @@ pub fn Sidebar(
                                                     EcoCategory::Basura => "bg-emerald-50/90 text-emerald-900 border-emerald-300 ring-1 ring-emerald-300/50",
                                                     EcoCategory::Agua => "bg-sky-50/90 text-sky-900 border-sky-300 ring-1 ring-sky-300/50",
                                                     EcoCategory::Aire => "bg-purple-50/90 text-purple-900 border-purple-300 ring-1 ring-purple-300/50",
+                                                    EcoCategory::Seguridad => "bg-indigo-50/90 text-indigo-900 border-indigo-300 ring-1 ring-indigo-300/50",
+                                                    EcoCategory::Convivencia => "bg-orange-50/90 text-orange-900 border-orange-300 ring-1 ring-orange-300/50",
+                                                    EcoCategory::RiesgoUrbano => "bg-slate-100 text-slate-900 border-slate-300 ring-1 ring-slate-300/60",
                                                 }
                                             )
                                         } else {

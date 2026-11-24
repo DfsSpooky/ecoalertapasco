@@ -3,20 +3,67 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+pub enum AlertDomain {
+    Ambiental,
+    Ciudadana,
+}
+
+impl Default for AlertDomain {
+    fn default() -> Self {
+        AlertDomain::Ambiental
+    }
+}
+
+impl AlertDomain {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            AlertDomain::Ambiental => "Ambiental",
+            AlertDomain::Ciudadana => "Seguridad Ciudadana",
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AlertDomain::Ambiental => "ambiental",
+            AlertDomain::Ciudadana => "ciudadana",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum EcoCategory {
     Mineria,
     Basura,
     Agua,
     Aire,
+    Seguridad,
+    Convivencia,
+    #[serde(rename = "riesgo_urbano")]
+    RiesgoUrbano,
 }
 
 impl EcoCategory {
+    pub fn domain(&self) -> AlertDomain {
+        match self {
+            EcoCategory::Mineria | EcoCategory::Basura | EcoCategory::Agua | EcoCategory::Aire => {
+                AlertDomain::Ambiental
+            }
+            EcoCategory::Seguridad | EcoCategory::Convivencia | EcoCategory::RiesgoUrbano => {
+                AlertDomain::Ciudadana
+            }
+        }
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             EcoCategory::Mineria => "Minería",
             EcoCategory::Basura => "Basura",
             EcoCategory::Agua => "Agua",
             EcoCategory::Aire => "Aire",
+            EcoCategory::Seguridad => "Delincuencia",
+            EcoCategory::Convivencia => "Ebrios / Disturbios",
+            EcoCategory::RiesgoUrbano => "Zona Oscura",
         }
     }
 
@@ -26,16 +73,22 @@ impl EcoCategory {
             EcoCategory::Basura => "🗑️",
             EcoCategory::Agua => "💧",
             EcoCategory::Aire => "💨",
+            EcoCategory::Seguridad => "🛡️",
+            EcoCategory::Convivencia => "🍺",
+            EcoCategory::RiesgoUrbano => "🔦",
         }
     }
 
     #[allow(dead_code)]
     pub fn color_hex(&self) -> &'static str {
         match self {
-            EcoCategory::Mineria => "#F59E0B", // Amber
-            EcoCategory::Basura => "#10B981",  // Emerald
-            EcoCategory::Agua => "#0288D1",    // Blue
-            EcoCategory::Aire => "#8B5CF6",    // Purple
+            EcoCategory::Mineria => "#F59E0B",     // Amber
+            EcoCategory::Basura => "#10B981",      // Emerald
+            EcoCategory::Agua => "#0288D1",        // Blue
+            EcoCategory::Aire => "#8B5CF6",        // Purple
+            EcoCategory::Seguridad => "#4F46E5",   // Indigo
+            EcoCategory::Convivencia => "#EA580C", // Orange
+            EcoCategory::RiesgoUrbano => "#334155",// Slate
         }
     }
 
@@ -45,6 +98,33 @@ impl EcoCategory {
             EcoCategory::Basura => "bg-emerald-50 text-emerald-800 border-emerald-200",
             EcoCategory::Agua => "bg-sky-50 text-sky-800 border-sky-200",
             EcoCategory::Aire => "bg-purple-50 text-purple-800 border-purple-200",
+            EcoCategory::Seguridad => "bg-indigo-50 text-indigo-800 border-indigo-200",
+            EcoCategory::Convivencia => "bg-orange-50 text-orange-800 border-orange-200",
+            EcoCategory::RiesgoUrbano => "bg-slate-100 text-slate-800 border-slate-300",
+        }
+    }
+
+    pub fn environmental_all() -> &'static [EcoCategory] {
+        &[
+            EcoCategory::Mineria,
+            EcoCategory::Basura,
+            EcoCategory::Agua,
+            EcoCategory::Aire,
+        ]
+    }
+
+    pub fn citizen_all() -> &'static [EcoCategory] {
+        &[
+            EcoCategory::Seguridad,
+            EcoCategory::Convivencia,
+            EcoCategory::RiesgoUrbano,
+        ]
+    }
+
+    pub fn for_domain(domain: AlertDomain) -> &'static [EcoCategory] {
+        match domain {
+            AlertDomain::Ambiental => Self::environmental_all(),
+            AlertDomain::Ciudadana => Self::citizen_all(),
         }
     }
 
@@ -54,6 +134,9 @@ impl EcoCategory {
             EcoCategory::Basura,
             EcoCategory::Agua,
             EcoCategory::Aire,
+            EcoCategory::Seguridad,
+            EcoCategory::Convivencia,
+            EcoCategory::RiesgoUrbano,
         ]
     }
 }
@@ -140,6 +223,8 @@ fn default_status() -> String {
 pub struct EcoAlert {
     #[serde(deserialize_with = "deserialize_id_from_any")]
     pub id: String,
+    #[serde(default)]
+    pub domain: AlertDomain,
     pub title: String,
     pub description: String,
     pub category: EcoCategory,
@@ -153,6 +238,14 @@ pub struct EcoAlert {
     pub image_url: Option<String>,
     #[serde(default)]
     pub image_url_2: Option<String>,
+    #[serde(default)]
+    pub is_anonymous_public: bool,
+    #[serde(default)]
+    pub hide_media_public: bool,
+    #[serde(default)]
+    pub has_private_evidence: bool,
+    #[serde(default)]
+    pub expires_at: Option<String>,
     #[serde(default = "default_status")]
     pub status: String,
     #[serde(default)]
@@ -172,6 +265,40 @@ pub struct EcoAlert {
 }
 
 impl EcoAlert {
+    pub fn is_citizen_security(&self) -> bool {
+        self.domain == AlertDomain::Ciudadana || self.category.domain() == AlertDomain::Ciudadana
+    }
+
+    pub fn is_expired(&self) -> bool {
+        if let Some(ref exp) = self.expires_at {
+            let exp_ms = js_sys::Date::parse(exp);
+            if !exp_ms.is_nan() {
+                return exp_ms <= js_sys::Date::now();
+            }
+        }
+        false
+    }
+
+    pub fn remaining_ttl_label(&self) -> Option<String> {
+        let exp = self.expires_at.as_ref()?;
+        let exp_ms = js_sys::Date::parse(exp);
+        if exp_ms.is_nan() {
+            return None;
+        }
+        let diff_ms = exp_ms - js_sys::Date::now();
+        if diff_ms <= 0.0 {
+            return Some("Expirada".to_string());
+        }
+        let total_mins = (diff_ms / 60_000.0).ceil() as u32;
+        let hours = total_mins / 60;
+        let mins = total_mins % 60;
+        if hours > 0 {
+            Some(format!("Expira en {}h {:02}m", hours, mins))
+        } else {
+            Some(format!("Expira en {}m", mins))
+        }
+    }
+
     #[allow(dead_code)]
     pub fn parsed_history(&self) -> Vec<(String, String)> {
         match &self.history_log {
@@ -199,9 +326,14 @@ pub struct AuthUser {
     pub email: Option<String>,
     #[serde(default)]
     pub is_staff: bool,
+    #[serde(default)]
+    pub is_superuser: bool,
     /// Conductor de camión recolector (grupo `recolectores` en el backend)
     #[serde(default)]
     pub is_collector: bool,
+    /// Operador de Seguridad Ciudadana (grupo `serenazgo` en el backend)
+    #[serde(default)]
+    pub is_serenazgo: bool,
     #[serde(default)]
     pub photo_url: Option<String>,
     #[serde(default)]
@@ -210,11 +342,23 @@ pub struct AuthUser {
 
 impl AuthUser {
     pub fn is_authority(&self) -> bool {
-        self.is_staff
+        self.is_staff || self.is_serenazgo || self.is_superuser
+    }
+
+    pub fn can_manage_ambiental(&self) -> bool {
+        self.is_staff || self.is_superuser
+    }
+
+    pub fn can_manage_ciudadana(&self) -> bool {
+        self.is_serenazgo || self.is_superuser
     }
 
     pub fn role_label(&self) -> &'static str {
-        if self.is_staff {
+        if self.is_superuser {
+            "Administrador / Supervisión Total"
+        } else if self.is_serenazgo && !self.is_staff {
+            "Serenazgo / Seguridad Ciudadana"
+        } else if self.is_staff {
             "Autoridad / Fiscalizador"
         } else {
             "Ciudadano Vigilante"
@@ -269,6 +413,8 @@ pub struct RegisterPayload<'a> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateAlertPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<AlertDomain>,
     pub title: String,
     pub description: String,
     pub category: EcoCategory,

@@ -50,6 +50,9 @@ pub fn InspectionReportModal(
                 EcoCategory::Basura => ("🗑️", "Residuos Sólidos & Botaderos"),
                 EcoCategory::Agua => ("💧", "Recursos Hídricos & Efluentes"),
                 EcoCategory::Aire => ("🌬️", "Calidad del Aire & Emisiones"),
+                EcoCategory::Seguridad => ("🛡️", "Seguridad Ciudadana"),
+                EcoCategory::Convivencia => ("🍺", "Convivencia & Orden Público"),
+                EcoCategory::RiesgoUrbano => ("🔦", "Riesgo Urbano & Alumbrado"),
             };
 
             let (sev_label, sev_badge_class) = match alert.severity {

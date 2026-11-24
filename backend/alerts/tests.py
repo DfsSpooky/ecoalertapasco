@@ -702,3 +702,167 @@ class RouteEditorBackendTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
         empty = CollectionRoute.objects.create(name='Sin historial', path=self.waypoints)
         self.assertEqual(self.client.delete(f'/api/routes/{empty.id}/').status_code, status.HTTP_204_NO_CONTENT)
+
+
+class CitizenSecurityAlertsTests(TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+        from django.contrib.auth.models import Group
+        from alerts.models import SERENAZGO_GROUP_NAME
+
+        cache.clear()
+        self.client = APIClient()
+        self.citizen = User.objects.create_user(username='vecino_real', password='password123')
+        self.other_citizen = User.objects.create_user(username='otro_vecino', password='password123')
+        self.env_staff = User.objects.create_user(username='fiscal_ambiental', password='password123', is_staff=True)
+        self.superuser = User.objects.create_superuser(username='super_pasco', email='sup@pasco.pe', password='password123')
+
+        serenazgo_group, _ = Group.objects.get_or_create(name=SERENAZGO_GROUP_NAME)
+        self.serenazgo_user = User.objects.create_user(username='sereno_1', password='password123')
+        self.serenazgo_user.groups.add(serenazgo_group)
+
+        self.citizen_payload = {
+            'title': 'Personas ebrias alterando el orden',
+            'description': 'Grupo consumiendo alcohol frente al parque.',
+            'category': 'convivencia',
+            'severity': 'medio',
+            'district': 'yanacancha',
+            'address': 'Jr. Los Próceres 120',
+            'latitude': -10.6650,
+            'longitude': -76.2540,
+        }
+
+    def tearDown(self):
+        from django.core.cache import cache
+        cache.clear()
+
+    def _make_webp_upload(self, name='evidencia.png'):
+        from PIL import Image
+        import io
+        buf = io.BytesIO()
+        Image.new('RGB', (40, 40), color=(120, 40, 40)).save(buf, format='PNG')
+        return SimpleUploadedFile(name, buf.getvalue(), content_type='image/png')
+
+    def test_citizen_alert_requires_account_but_is_anonymous_publicly_and_expires_in_6h(self):
+        from django.utils import timezone
+        self.client.force_authenticate(user=self.citizen)
+        res = self.client.post('/api/alerts/', self.citizen_payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+
+        alert = Alert.objects.get(pk=res.data['id'])
+        self.assertEqual(alert.reported_by, self.citizen)
+        self.assertEqual(alert.domain, 'ciudadana')
+        self.assertTrue(alert.is_anonymous_public)
+        self.assertTrue(alert.hide_media_public)
+        self.assertIsNotNone(alert.expires_at)
+        ttl_hours = (alert.expires_at - alert.created_at).total_seconds() / 3600.0
+        self.assertGreater(ttl_hours, 5.9)
+        self.assertLessEqual(ttl_hours, 6.05)
+
+        # Público (/api/sync/) nunca ve username ni reported_by
+        self.client.force_authenticate(user=None)
+        sync_res = self.client.get('/api/sync/')
+        self.assertEqual(sync_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(sync_res.data['alerts']), 1)
+        pub = sync_res.data['alerts'][0]
+        self.assertEqual(pub['domain'], 'ciudadana')
+        self.assertEqual(pub['reporter_name'], 'Vecino Anónimo')
+        self.assertIsNone(pub['reported_by'])
+        self.assertNotIn('vecino_real', pub['history_log'] or '')
+
+        # Al expirar las 6h desaparece del mapa público, pero Serenazgo con include_expired=1 sigue viéndola
+        Alert.objects.filter(pk=alert.id).update(expires_at=timezone.now() - timezone.timedelta(minutes=5))
+        sync_after = self.client.get('/api/sync/')
+        self.assertEqual(len(sync_after.data['alerts']), 0)
+
+        self.client.force_authenticate(user=self.serenazgo_user)
+        sereno_hist = self.client.get('/api/alerts/?domain=ciudadana&include_expired=1')
+        self.assertEqual(sereno_hist.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(sereno_hist.data), 1)
+
+    def test_private_evidence_upload_and_serenazgo_only_access(self):
+        # Anónimo no puede subir evidencia privada
+        anon_up = self.client.post('/api/upload/?scope=ciudadana', {'image': self._make_webp_upload()}, format='multipart')
+        self.assertEqual(anon_up.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        self.client.force_authenticate(user=self.citizen)
+        up_res = self.client.post('/api/upload/?scope=ciudadana', {'image': self._make_webp_upload()}, format='multipart')
+        self.assertEqual(up_res.status_code, status.HTTP_200_OK, up_res.data)
+        self.assertTrue(up_res.data['is_private'])
+        self.assertIn('/api/evidence/private/', up_res.data['url'])
+
+        payload = dict(self.citizen_payload, image_url=up_res.data['url'])
+        create_res = self.client.post('/api/alerts/', payload, format='json')
+        self.assertEqual(create_res.status_code, status.HTTP_201_CREATED, create_res.data)
+        alert_id = create_res.data['id']
+
+        # Público no recibe image_url en /api/sync/, solo has_private_evidence=True
+        self.client.force_authenticate(user=None)
+        sync_res = self.client.get('/api/sync/')
+        pub = sync_res.data['alerts'][0]
+        self.assertIsNone(pub['image_url'])
+        self.assertTrue(pub['has_private_evidence'])
+
+        # Anónimo, otro ciudadano y staff ambiental NO pueden abrir el endpoint protegido
+        ev_url = f'/api/alerts/{alert_id}/evidence/1/'
+        self.assertEqual(self.client.get(ev_url).status_code, status.HTTP_401_UNAUTHORIZED)
+
+        self.client.force_authenticate(user=self.other_citizen)
+        self.assertEqual(self.client.get(ev_url).status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(user=self.env_staff)
+        self.assertEqual(self.client.get(ev_url).status_code, status.HTTP_403_FORBIDDEN)
+
+        # Serenazgo, superusuario y el propio denunciante sí pueden ver la evidencia
+        for allowed_user in (self.serenazgo_user, self.superuser, self.citizen):
+            self.client.force_authenticate(user=allowed_user)
+            resp = self.client.get(ev_url)
+            self.assertEqual(resp.status_code, status.HTTP_200_OK)
+            resp.close()
+
+    def test_domain_management_isolation_and_public_verification_blocking(self):
+        self.client.force_authenticate(user=self.citizen)
+        c_res = self.client.post('/api/alerts/', self.citizen_payload, format='json')
+        citizen_alert_id = c_res.data['id']
+
+        env_alert = Alert.objects.create(
+            title='Botadero en carretera',
+            description='Acumulación de residuos.',
+            category='basura',
+            severity='medio',
+            district='chaupimarca',
+            address='Av. Circunvalación',
+            latitude=-10.67,
+            longitude=-76.26,
+            reported_by=self.citizen,
+        )
+
+        # Staff ambiental no-superuser NO puede gestionar alertas ciudadanas
+        self.client.force_authenticate(user=self.env_staff)
+        self.assertEqual(
+            self.client.patch(f'/api/alerts/{citizen_alert_id}/', {'status': 'solved'}, format='json').status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+        # Serenazgo sí gestiona ciudadanas, pero NO ambientales
+        self.client.force_authenticate(user=self.serenazgo_user)
+        self.assertEqual(
+            self.client.patch(f'/api/alerts/{citizen_alert_id}/', {'status': 'solved', 'resolution_comment': 'Patrulla en zona'}, format='json').status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(
+            self.client.patch(f'/api/alerts/{env_alert.id}/', {'status': 'solved'}, format='json').status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+        # Verificación QR pública ambiental y export_csv ciudadano bloqueados al público
+        self.client.force_authenticate(user=None)
+        self.assertEqual(self.client.get(f'/api/alerts/{citizen_alert_id}/verify/').status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(self.client.get('/api/alerts/export_csv/?domain=ciudadana').status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(user=self.serenazgo_user)
+        csv_res = self.client.get('/api/alerts/export_csv/?domain=ciudadana')
+        self.assertEqual(csv_res.status_code, status.HTTP_200_OK)
+        csv_text = csv_res.content.decode('utf-8')
+        self.assertIn('Vecino Anónimo', csv_text)
+        self.assertNotIn('vecino_real', csv_text)

@@ -2,18 +2,20 @@ use leptos::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use crate::api::{
-    alert_detail_url, system_settings_url, test_gemini_url, upload_url, waste_point_detail_url,
-    waste_points_url,
+    alert_detail_url, alert_evidence_url, alerts_ciudadana_history_url, export_csv_url,
+    fetch_protected_image_blob_url, system_settings_url, test_gemini_url, upload_url,
+    waste_point_detail_url, waste_points_url,
 };
 use crate::components::fleet_routes_tab::FleetRoutesTab;
 use crate::models::{
-    TruckRun,
+    AlertDomain, TruckRun,
     AuthUser, CreateWastePointPayload, EcoAlert, EcoCategory, EcoDistrict, EcoSeverity, FillLevel,
     GeminiModelInfo, SystemSettingsResponse, TestGeminiResponse, WastePoint, WasteType,
 };
 
 #[component]
 pub fn AuthorityDashboard(
+    active_domain: RwSignal<AlertDomain>,
     alerts: RwSignal<Vec<EcoAlert>>,
     waste_points: RwSignal<Vec<WastePoint>>,
     show_dashboard: RwSignal<bool>,
@@ -26,6 +28,36 @@ pub fn AuthorityDashboard(
     truck_runs: RwSignal<Vec<TruckRun>>,
 ) -> impl IntoView {
     let active_tab = create_rw_signal(0); // 0 = Denuncias, 1 = Puntos de Acopio, 2 = Rutas y Flota
+    let citizen_history_alerts = create_rw_signal(Vec::<EcoAlert>::new());
+    let private_evidence_modal = create_rw_signal(None::<(String, Vec<String>)>);
+
+    create_effect(move |_| {
+        let open = show_dashboard.get();
+        let user_opt = current_user.get();
+        if open {
+            if let Some(u) = user_opt {
+                if u.can_manage_ciudadana() {
+                    let token = u.token.clone();
+                    spawn_local(async move {
+                        if let Ok(req) = gloo_net::http::Request::get(&alerts_ciudadana_history_url())
+                            .header("Authorization", &format!("Token {}", token))
+                            .send()
+                            .await
+                        {
+                            if req.ok() {
+                                if let Ok(list) = req.json::<Vec<EcoAlert>>().await {
+                                    citizen_history_alerts.set(list);
+                                }
+                            }
+                        }
+                    });
+                }
+                if !u.can_manage_ambiental() {
+                    active_tab.set(0);
+                }
+            }
+        }
+    });
 
     // Alert filters
     let search_query = create_rw_signal("".to_string());
@@ -62,6 +94,20 @@ pub fn AuthorityDashboard(
     let selected_squad = create_rw_signal("Cuadrilla de Limpieza y Residuos Sólidos".to_string());
     let inspector_name = create_rw_signal("Ing. Fiscalizador Ambiental".to_string());
     let squad_notes = create_rw_signal("Inspección técnica inmediata y ejecución de medidas correctivas.".to_string());
+
+    create_effect(move |_| {
+        if let Some(target) = assign_squad_target.get() {
+            if target.is_citizen_security() {
+                selected_squad.set("Patrulla Motorizada de Serenazgo".to_string());
+                inspector_name.set("Supervisor de Turno Serenazgo".to_string());
+                squad_notes.set("Patrullaje preventivo inmediato y verificación en zona.".to_string());
+            } else {
+                selected_squad.set("Cuadrilla de Limpieza y Residuos Sólidos".to_string());
+                inspector_name.set("Ing. Fiscalizador Ambiental".to_string());
+                squad_notes.set("Inspección técnica inmediata y ejecución de medidas correctivas.".to_string());
+            }
+        }
+    });
 
     // History timeline modal state
     let history_target = create_rw_signal(None::<EcoAlert>);
@@ -140,9 +186,38 @@ pub fn AuthorityDashboard(
         }
     };
 
+    let dashboard_domain = create_memo(move |_| {
+        match current_user.get() {
+            Some(u) if u.can_manage_ciudadana() && !u.can_manage_ambiental() => AlertDomain::Ciudadana,
+            Some(u) if u.can_manage_ambiental() && !u.can_manage_ciudadana() => AlertDomain::Ambiental,
+            _ => active_domain.get(),
+        }
+    });
+
+    let domain_alerts = create_memo(move |_| {
+        let dom = dashboard_domain.get();
+        if dom == AlertDomain::Ciudadana {
+            let hist = citizen_history_alerts.get();
+            if !hist.is_empty() {
+                return hist;
+            }
+            alerts
+                .get()
+                .into_iter()
+                .filter(|a| a.category.domain() == AlertDomain::Ciudadana)
+                .collect()
+        } else {
+            alerts
+                .get()
+                .into_iter()
+                .filter(|a| a.category.domain() == AlertDomain::Ambiental)
+                .collect()
+        }
+    });
+
     // Filtered alerts for the dashboard table
     let displayed_alerts = create_memo(move |_| {
-        let all = alerts.get();
+        let all = domain_alerts.get();
         let query = search_query.get().trim().to_lowercase();
         let stat = filter_status.get();
         let dist_opt = filter_district.get();
@@ -184,12 +259,12 @@ pub fn AuthorityDashboard(
     });
 
     // KPI counts
-    let total_count = move || alerts.get().len();
-    let pending_count = move || alerts.get().iter().filter(|a| a.status == "pending").count();
-    let verified_count = move || alerts.get().iter().filter(|a| a.status == "verified").count();
-    let solved_count = move || alerts.get().iter().filter(|a| a.status == "solved").count();
+    let total_count = move || domain_alerts.get().len();
+    let pending_count = move || domain_alerts.get().iter().filter(|a| a.status == "pending").count();
+    let verified_count = move || domain_alerts.get().iter().filter(|a| a.status == "verified").count();
+    let solved_count = move || domain_alerts.get().iter().filter(|a| a.status == "solved").count();
     let urgent_count = move || {
-        alerts.get().iter().filter(|a| {
+        domain_alerts.get().iter().filter(|a| {
             let (urg, over, _, _) = get_alert_sla(a);
             urg || over
         }).count()
@@ -1102,10 +1177,18 @@ pub fn AuthorityDashboard(
                                 </div>
                                 <div>
                                     <h1 class="text-base sm:text-lg font-bold text-slate-900 leading-tight">
-                                        "Panel de Control de Autoridades"
+                                        {move || if dashboard_domain.get() == AlertDomain::Ciudadana {
+                                            "Centro de Control · Serenazgo Pasco"
+                                        } else {
+                                            "Panel de Control de Autoridades"
+                                        }}
                                     </h1>
                                     <p class="text-xs text-slate-500 font-medium">
-                                        "Fiscalización ambiental, semáforo SLA y gestión municipal · Cerro de Pasco"
+                                        {move || if dashboard_domain.get() == AlertDomain::Ciudadana {
+                                            "Seguridad ciudadana, evidencias reservadas e incidencias efímeras · Cerro de Pasco"
+                                        } else {
+                                            "Fiscalización ambiental, semáforo SLA y gestión municipal · Cerro de Pasco"
+                                        }}
                                     </p>
                                 </div>
                             </div>
@@ -1125,17 +1208,19 @@ pub fn AuthorityDashboard(
                                     }
                                 })}
 
-                                <button
-                                    class="px-3.5 py-2 text-xs font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200 rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
-                                    title="Configurar IA Gemini y Seguridad Turnstile"
-                                    on:click=open_gemini_modal
-                                >
-                                    <svg class="w-4 h-4 text-sky-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                                        <circle cx="12" cy="12" r="3"/>
-                                    </svg>
-                                    <span class="hidden sm:inline">"Ajustes del Sistema"</span>
-                                </button>
+                                {move || current_user.get().map(|u| u.can_manage_ambiental()).unwrap_or(false).then(|| view! {
+                                    <button
+                                        class="px-3.5 py-2 text-xs font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200 rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
+                                        title="Configurar IA Gemini y Seguridad Turnstile"
+                                        on:click=open_gemini_modal
+                                    >
+                                        <svg class="w-4 h-4 text-sky-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                                            <circle cx="12" cy="12" r="3"/>
+                                        </svg>
+                                        <span class="hidden sm:inline">"Ajustes del Sistema"</span>
+                                    </button>
+                                })}
 
                             <button
                                 class="px-4 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-xs transition flex items-center space-x-1.5"
@@ -1169,50 +1254,71 @@ pub fn AuthorityDashboard(
                                     <line x1="12" y1="9" x2="12" y2="13"/>
                                     <line x1="12" y1="17" x2="12.01" y2="17"/>
                                 </svg>
-                                <span>"Denuncias Ambientales"</span>
+                                <span>
+                                    {move || if dashboard_domain.get() == AlertDomain::Ciudadana {
+                                        "Seguridad Ciudadana"
+                                    } else {
+                                        "Denuncias Ambientales"
+                                    }}
+                                </span>
                                 <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-white/20 text-white font-mono">
                                     {total_count}
                                 </span>
                             </button>
 
-                            <button
-                                class=move || {
-                                    if active_tab.get() == 1 {
-                                        "px-4 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white shadow-xs flex items-center space-x-2 transition"
-                                    } else {
-                                        "px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 flex items-center space-x-2 transition"
+                            {move || current_user.get().map(|u| u.can_manage_ambiental()).unwrap_or(false).then(|| view! {
+                                <button
+                                    class=move || {
+                                        if active_tab.get() == 1 {
+                                            "px-4 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white shadow-xs flex items-center space-x-2 transition"
+                                        } else {
+                                            "px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 flex items-center space-x-2 transition"
+                                        }
                                     }
-                                }
-                                on:click=move |_| active_tab.set(1)
-                            >
-                                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/>
-                                    <path d="M11 19h8.2a1.8 1.8 0 0 0 1.573-.896 1.79 1.79 0 0 0 0-1.792L16.8 9.5"/>
-                                    <path d="m15.5 13-3.5 6-3.5-6"/>
-                                    <path d="m2 9 3-5 3 5"/>
-                                </svg>
-                                <span>"Puntos de Acopio & Contenedores"</span>
-                                <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200 text-slate-700 font-mono">
-                                    {move || waste_points.get().len()}
-                                </span>
-                            </button>
+                                    on:click=move |_| active_tab.set(1)
+                                >
+                                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/>
+                                        <path d="M11 19h8.2a1.8 1.8 0 0 0 1.573-.896 1.79 1.79 0 0 0 0-1.792L16.8 9.5"/>
+                                        <path d="m15.5 13-3.5 6-3.5-6"/>
+                                        <path d="m2 9 3-5 3 5"/>
+                                    </svg>
+                                    <span>"Puntos de Acopio & Contenedores"</span>
+                                    <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200 text-slate-700 font-mono">
+                                        {move || waste_points.get().len()}
+                                    </span>
+                                </button>
 
-                            <button
-                                class=move || {
-                                    if active_tab.get() == 2 {
-                                        "px-4 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white shadow-xs flex items-center space-x-2 transition"
-                                    } else {
-                                        "px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 flex items-center space-x-2 transition"
+                                <button
+                                    class=move || {
+                                        if active_tab.get() == 2 {
+                                            "px-4 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white shadow-xs flex items-center space-x-2 transition"
+                                        } else {
+                                            "px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 flex items-center space-x-2 transition"
+                                        }
                                     }
-                                }
-                                on:click=move |_| active_tab.set(2)
-                            >
-                                <span>"🚛"</span>
-                                <span>"Rutas y Flota"</span>
-                                <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-mono">
-                                    {move || truck_runs.with(|r| r.iter().filter(|x| x.status == "active").count())}
-                                </span>
-                            </button>
+                                    on:click=move |_| active_tab.set(2)
+                                >
+                                    <span>"🚛"</span>
+                                    <span>"Rutas y Flota"</span>
+                                    <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-mono">
+                                        {move || truck_runs.with(|r| r.iter().filter(|x| x.status == "active").count())}
+                                    </span>
+                                </button>
+                            })}
+
+                            {move || current_user.get().map(|u| u.can_manage_ambiental() && u.can_manage_ciudadana()).unwrap_or(false).then(|| view! {
+                                <div class="ml-auto flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200">
+                                    <button
+                                        class=move || if active_domain.get() == AlertDomain::Ambiental { "px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-600 text-white" } else { "px-2.5 py-1 rounded-lg text-[11px] font-semibold text-slate-600" }
+                                        on:click=move |_| active_domain.set(AlertDomain::Ambiental)
+                                    >"🌱 Ambiental"</button>
+                                    <button
+                                        class=move || if active_domain.get() == AlertDomain::Ciudadana { "px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-600 text-white" } else { "px-2.5 py-1 rounded-lg text-[11px] font-semibold text-slate-600" }
+                                        on:click=move |_| active_domain.set(AlertDomain::Ciudadana)
+                                    >"🛡️ Serenazgo"</button>
+                                </div>
+                            })}
                         </div>
                     </div>
 
@@ -1275,19 +1381,28 @@ pub fn AuthorityDashboard(
                                         </div>
 
                                         {move || show_analytics.get().then(|| {
-                                            let all = alerts.get();
+                                            let all = domain_alerts.get();
                                             let total = all.len();
                                             let total_f = if total == 0 { 1.0 } else { total as f64 };
+                                            let is_ciudadana = dashboard_domain.get() == AlertDomain::Ciudadana;
 
                                             let mineria = all.iter().filter(|a| a.category == EcoCategory::Mineria).count();
                                             let basura = all.iter().filter(|a| a.category == EcoCategory::Basura).count();
                                             let agua = all.iter().filter(|a| a.category == EcoCategory::Agua).count();
                                             let aire = all.iter().filter(|a| a.category == EcoCategory::Aire).count();
 
+                                            let seguridad = all.iter().filter(|a| a.category == EcoCategory::Seguridad).count();
+                                            let convivencia = all.iter().filter(|a| a.category == EcoCategory::Convivencia).count();
+                                            let riesgo = all.iter().filter(|a| a.category == EcoCategory::RiesgoUrbano).count();
+
                                             let mineria_pct = (mineria as f64 * 100.0) / total_f;
                                             let basura_pct = (basura as f64 * 100.0) / total_f;
                                             let agua_pct = (agua as f64 * 100.0) / total_f;
                                             let aire_pct = (aire as f64 * 100.0) / total_f;
+
+                                            let seguridad_pct = (seguridad as f64 * 100.0) / total_f;
+                                            let convivencia_pct = (convivencia as f64 * 100.0) / total_f;
+                                            let riesgo_pct = (riesgo as f64 * 100.0) / total_f;
 
                                             let critico = all.iter().filter(|a| a.severity == EcoSeverity::Critico).count();
                                             let medio = all.iter().filter(|a| a.severity == EcoSeverity::Medio).count();
@@ -1316,10 +1431,20 @@ pub fn AuthorityDashboard(
                                                             <div class="relative w-24 h-24 shrink-0">
                                                                 <svg viewBox="0 0 42 42" class="w-full h-full transform -rotate-90">
                                                                     <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#f1f5f9" stroke-width="6.5"></circle>
-                                                                    <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#d97706" stroke-width="6.5" stroke-dasharray=format!("{} {}", mineria_pct, 100.0 - mineria_pct) stroke-dashoffset="0"></circle>
-                                                                    <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#059669" stroke-width="6.5" stroke-dasharray=format!("{} {}", basura_pct, 100.0 - basura_pct) stroke-dashoffset=format!("-{}", mineria_pct)></circle>
-                                                                    <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#0284c7" stroke-width="6.5" stroke-dasharray=format!("{} {}", agua_pct, 100.0 - agua_pct) stroke-dashoffset=format!("-{}", mineria_pct + basura_pct)></circle>
-                                                                    <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#7c3aed" stroke-width="6.5" stroke-dasharray=format!("{} {}", aire_pct, 100.0 - aire_pct) stroke-dashoffset=format!("-{}", mineria_pct + basura_pct + agua_pct)></circle>
+                                                                    {if is_ciudadana {
+                                                                        view! {
+                                                                            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#4f46e5" stroke-width="6.5" stroke-dasharray=format!("{} {}", seguridad_pct, 100.0 - seguridad_pct) stroke-dashoffset="0"></circle>
+                                                                            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#ea580c" stroke-width="6.5" stroke-dasharray=format!("{} {}", convivencia_pct, 100.0 - convivencia_pct) stroke-dashoffset=format!("-{}", seguridad_pct)></circle>
+                                                                            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#334155" stroke-width="6.5" stroke-dasharray=format!("{} {}", riesgo_pct, 100.0 - riesgo_pct) stroke-dashoffset=format!("-{}", seguridad_pct + convivencia_pct)></circle>
+                                                                        }.into_view()
+                                                                    } else {
+                                                                        view! {
+                                                                            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#d97706" stroke-width="6.5" stroke-dasharray=format!("{} {}", mineria_pct, 100.0 - mineria_pct) stroke-dashoffset="0"></circle>
+                                                                            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#059669" stroke-width="6.5" stroke-dasharray=format!("{} {}", basura_pct, 100.0 - basura_pct) stroke-dashoffset=format!("-{}", mineria_pct)></circle>
+                                                                            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#0284c7" stroke-width="6.5" stroke-dasharray=format!("{} {}", agua_pct, 100.0 - agua_pct) stroke-dashoffset=format!("-{}", mineria_pct + basura_pct)></circle>
+                                                                            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#7c3aed" stroke-width="6.5" stroke-dasharray=format!("{} {}", aire_pct, 100.0 - aire_pct) stroke-dashoffset=format!("-{}", mineria_pct + basura_pct + agua_pct)></circle>
+                                                                        }.into_view()
+                                                                    }}
                                                                 </svg>
                                                                 <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                                                                     <span class="text-xs font-black text-slate-900 leading-tight">{total}</span>
@@ -1327,36 +1452,45 @@ pub fn AuthorityDashboard(
                                                                 </div>
                                                             </div>
 
-                                                            <div class="flex-1 space-y-1 text-[11px] min-w-0">
-                                                                <div class="flex items-center justify-between text-slate-700">
-                                                                    <span class="flex items-center space-x-1.5 truncate">
-                                                                        <span class="w-2 h-2 rounded-full bg-amber-600 shrink-0"></span>
-                                                                        <span>"Minería"</span>
-                                                                    </span>
-                                                                    <span class="font-bold text-slate-900 font-mono">{format!("{} ({:.0}%)", mineria, mineria_pct)}</span>
-                                                                </div>
-                                                                <div class="flex items-center justify-between text-slate-700">
-                                                                    <span class="flex items-center space-x-1.5 truncate">
-                                                                        <span class="w-2 h-2 rounded-full bg-emerald-600 shrink-0"></span>
-                                                                        <span>"Residuos"</span>
-                                                                    </span>
-                                                                    <span class="font-bold text-slate-900 font-mono">{format!("{} ({:.0}%)", basura, basura_pct)}</span>
-                                                                </div>
-                                                                <div class="flex items-center justify-between text-slate-700">
-                                                                    <span class="flex items-center space-x-1.5 truncate">
-                                                                        <span class="w-2 h-2 rounded-full bg-sky-600 shrink-0"></span>
-                                                                        <span>"Agua"</span>
-                                                                    </span>
-                                                                    <span class="font-bold text-slate-900 font-mono">{format!("{} ({:.0}%)", agua, agua_pct)}</span>
-                                                                </div>
-                                                                <div class="flex items-center justify-between text-slate-700">
-                                                                    <span class="flex items-center space-x-1.5 truncate">
-                                                                        <span class="w-2 h-2 rounded-full bg-purple-600 shrink-0"></span>
-                                                                        <span>"Aire"</span>
-                                                                    </span>
-                                                                    <span class="font-bold text-slate-900 font-mono">{format!("{} ({:.0}%)", aire, aire_pct)}</span>
-                                                                </div>
-                                                            </div>
+                                                            {if is_ciudadana {
+                                                                view! {
+                                                                    <div class="flex-1 space-y-1 text-[11px] min-w-0">
+                                                                        <div class="flex items-center justify-between text-slate-700">
+                                                                            <span class="flex items-center space-x-1.5 truncate"><span class="w-2 h-2 rounded-full bg-indigo-600 shrink-0"></span><span>"Delincuencia"</span></span>
+                                                                            <span class="font-bold text-slate-900 font-mono">{format!("{} ({:.0}%)", seguridad, seguridad_pct)}</span>
+                                                                        </div>
+                                                                        <div class="flex items-center justify-between text-slate-700">
+                                                                            <span class="flex items-center space-x-1.5 truncate"><span class="w-2 h-2 rounded-full bg-orange-600 shrink-0"></span><span>"Ebrios / Orden"</span></span>
+                                                                            <span class="font-bold text-slate-900 font-mono">{format!("{} ({:.0}%)", convivencia, convivencia_pct)}</span>
+                                                                        </div>
+                                                                        <div class="flex items-center justify-between text-slate-700">
+                                                                            <span class="flex items-center space-x-1.5 truncate"><span class="w-2 h-2 rounded-full bg-slate-700 shrink-0"></span><span>"Zona Oscura"</span></span>
+                                                                            <span class="font-bold text-slate-900 font-mono">{format!("{} ({:.0}%)", riesgo, riesgo_pct)}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                }.into_view()
+                                                            } else {
+                                                                view! {
+                                                                    <div class="flex-1 space-y-1 text-[11px] min-w-0">
+                                                                        <div class="flex items-center justify-between text-slate-700">
+                                                                            <span class="flex items-center space-x-1.5 truncate"><span class="w-2 h-2 rounded-full bg-amber-600 shrink-0"></span><span>"Minería"</span></span>
+                                                                            <span class="font-bold text-slate-900 font-mono">{format!("{} ({:.0}%)", mineria, mineria_pct)}</span>
+                                                                        </div>
+                                                                        <div class="flex items-center justify-between text-slate-700">
+                                                                            <span class="flex items-center space-x-1.5 truncate"><span class="w-2 h-2 rounded-full bg-emerald-600 shrink-0"></span><span>"Residuos"</span></span>
+                                                                            <span class="font-bold text-slate-900 font-mono">{format!("{} ({:.0}%)", basura, basura_pct)}</span>
+                                                                        </div>
+                                                                        <div class="flex items-center justify-between text-slate-700">
+                                                                            <span class="flex items-center space-x-1.5 truncate"><span class="w-2 h-2 rounded-full bg-sky-600 shrink-0"></span><span>"Agua"</span></span>
+                                                                            <span class="font-bold text-slate-900 font-mono">{format!("{} ({:.0}%)", agua, agua_pct)}</span>
+                                                                        </div>
+                                                                        <div class="flex items-center justify-between text-slate-700">
+                                                                            <span class="flex items-center space-x-1.5 truncate"><span class="w-2 h-2 rounded-full bg-purple-600 shrink-0"></span><span>"Aire"</span></span>
+                                                                            <span class="font-bold text-slate-900 font-mono">{format!("{} ({:.0}%)", aire, aire_pct)}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                }.into_view()
+                                                            }}
                                                         </div>
                                                     </div>
 
@@ -1499,6 +1633,49 @@ pub fn AuthorityDashboard(
                                                     on:click=move |_| filter_status.set("solved".to_string())
                                                 >
                                                     "Resueltos"
+                                                </button>
+                                                <button
+                                                    class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold border border-slate-200 flex items-center space-x-1 shrink-0 cursor-pointer"
+                                                    title="Exportar reporte CSV del dominio actual"
+                                                    on:click=move |_| {
+                                                        let dom = dashboard_domain.get();
+                                                        let url = format!("{}?domain={}", export_csv_url(), dom.as_str());
+                                                        if dom == AlertDomain::Ciudadana {
+                                                            if let Some(u) = current_user.get_untracked() {
+                                                                let tok = u.token.clone();
+                                                                spawn_local(async move {
+                                                                    if let Ok(req) = gloo_net::http::Request::get(&url)
+                                                                        .header("Authorization", &format!("Token {}", tok))
+                                                                        .send()
+                                                                        .await
+                                                                    {
+                                                                        if req.ok() {
+                                                                            if let Ok(bytes) = req.binary().await {
+                                                                                let uint8 = js_sys::Uint8Array::from(bytes.as_slice());
+                                                                                let arr = js_sys::Array::new();
+                                                                                arr.push(&uint8.buffer());
+                                                                                let props = web_sys::BlobPropertyBag::new();
+                                                                                props.set_type("text/csv;charset=utf-8");
+                                                                                if let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence_and_options(&arr, &props) {
+                                                                                    if let Ok(obj_url) = web_sys::Url::create_object_url_with_blob(&blob) {
+                                                                                        let _ = js_sys::eval(&format!(
+                                                                                            "(() => {{ const a = document.createElement('a'); a.href = '{}'; a.download = 'seguridad_ciudadana_pasco.csv'; document.body.appendChild(a); a.click(); a.remove(); }})();",
+                                                                                            obj_url
+                                                                                        ));
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                });
+                                                            }
+                                                        } else {
+                                                            let _ = js_sys::eval(&format!("window.open('{}', '_blank');", url));
+                                                        }
+                                                    }
+                                                >
+                                                    <span>"📥"</span>
+                                                    <span>"CSV"</span>
                                                 </button>
                                                 <button
                                                     class=move || {
@@ -1685,15 +1862,17 @@ pub fn AuthorityDashboard(
                                                                         // Actions
                                                                         <td class="py-3.5 px-4 text-right">
                                                                             <div class="flex items-center justify-end space-x-1.5 flex-wrap gap-y-1">
-                                                                                // 0. Ver en Mapa Interactivo
+                                                                                 // 0. Ver en Mapa Interactivo
                                                                                 <button
                                                                                     class="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg font-semibold text-[11px] transition flex items-center space-x-1 cursor-pointer shadow-2xs"
                                                                                     title="Ubicar e inspeccionar esta denuncia en el mapa general"
                                                                                     on:click={
                                                                                         let a_id = a.id.clone();
+                                                                                        let a_dom = a.category.domain();
                                                                                         let a_lat = a.latitude;
                                                                                         let a_lng = a.longitude;
                                                                                         move |_| {
+                                                                                            active_domain.set(a_dom);
                                                                                             selected_alert_id.set(Some(a_id.clone()));
                                                                                             show_dashboard.set(false);
                                                                                             let _ = js_sys::eval(&format!(
@@ -1707,36 +1886,67 @@ pub fn AuthorityDashboard(
                                                                                     <span>"Ver en Mapa"</span>
                                                                                 </button>
 
-                                                                                // 1. Acta Oficial
-                                                                                <button
-                                                                                    class="px-2 py-1 bg-sky-50 text-sky-800 hover:bg-sky-100 border border-sky-200 rounded-lg font-semibold text-[11px] transition flex items-center space-x-1 cursor-pointer"
-                                                                                    title="Ver Acta Técnica de Fiscalización"
-                                                                                    on:click={
-                                                                                        let a_for_acta = a.clone();
-                                                                                        move |_| inspection_target.set(Some(a_for_acta.clone()))
-                                                                                    }
-                                                                                >
-                                                                                    <i class="fa-solid fa-file-contract text-xs"></i>
-                                                                                    <span>"Acta"</span>
-                                                                                </button>
-
-                                                                                // 1.1 Descargar PDF Directo
-                                                                                <button
-                                                                                    class="px-2 py-1 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 rounded-lg font-semibold text-[11px] transition flex items-center space-x-1 cursor-pointer"
-                                                                                    title="Descargar directamente el Acta Pericial en formato PDF con membrete y QR oficial"
-                                                                                    on:click={
-                                                                                        let a_for_pdf = a.clone();
-                                                                                        move |_| {
-                                                                                            if let Ok(json_str) = serde_json::to_string(&a_for_pdf) {
-                                                                                                let script = format!("window.ecoPdf.generateInspectionActa({});", json_str);
-                                                                                                let _ = js_sys::eval(&script);
+                                                                                // 0.5 Evidencia Privada Serenazgo (si aplica)
+                                                                                {(a.is_citizen_security() && a.has_private_evidence).then(|| {
+                                                                                    let a_id = a.id.clone();
+                                                                                    let a_title = a.title.clone();
+                                                                                    view! {
+                                                                                        <button
+                                                                                            class="px-2 py-1 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 border border-indigo-200 rounded-lg font-semibold text-[11px] transition flex items-center space-x-1 cursor-pointer"
+                                                                                            title="Ver fotografía privada reservada para Serenazgo"
+                                                                                            on:click=move |_| {
+                                                                                                if let Some(u) = current_user.get_untracked() {
+                                                                                                    let id = a_id.clone();
+                                                                                                    let title = a_title.clone();
+                                                                                                    let tok = u.token.clone();
+                                                                                                    spawn_local(async move {
+                                                                                                        let mut imgs = Vec::new();
+                                                                                                        for slot in [1u8, 2u8] {
+                                                                                                            let url = alert_evidence_url(&id, slot);
+                                                                                                            if let Ok(b) = fetch_protected_image_blob_url(&url, &tok).await {
+                                                                                                                imgs.push(b);
+                                                                                                            }
+                                                                                                        }
+                                                                                                        private_evidence_modal.set(Some((title, imgs)));
+                                                                                                    });
+                                                                                                }
                                                                                             }
-                                                                                        }
+                                                                                        >
+                                                                                            <span>"🔒"</span>
+                                                                                            <span>"Foto"</span>
+                                                                                        </button>
                                                                                     }
-                                                                                >
-                                                                                    <i class="fa-solid fa-file-pdf text-xs"></i>
-                                                                                    <span>"PDF"</span>
-                                                                                </button>
+                                                                                })}
+
+                                                                                // 1. Acta Oficial y PDF (exclusivos para alertas ambientales)
+                                                                                {(!a.is_citizen_security()).then(|| {
+                                                                                    let a_for_acta = a.clone();
+                                                                                    let a_for_pdf = a.clone();
+                                                                                    view! {
+                                                                                        <button
+                                                                                            class="px-2 py-1 bg-sky-50 text-sky-800 hover:bg-sky-100 border border-sky-200 rounded-lg font-semibold text-[11px] transition flex items-center space-x-1 cursor-pointer"
+                                                                                            title="Ver Acta Técnica de Fiscalización"
+                                                                                            on:click=move |_| inspection_target.set(Some(a_for_acta.clone()))
+                                                                                        >
+                                                                                            <i class="fa-solid fa-file-contract text-xs"></i>
+                                                                                            <span>"Acta"</span>
+                                                                                        </button>
+
+                                                                                        <button
+                                                                                            class="px-2 py-1 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 rounded-lg font-semibold text-[11px] transition flex items-center space-x-1 cursor-pointer"
+                                                                                            title="Descargar directamente el Acta Pericial en formato PDF con membrete y QR oficial"
+                                                                                            on:click=move |_| {
+                                                                                                if let Ok(json_str) = serde_json::to_string(&a_for_pdf) {
+                                                                                                    let script = format!("window.ecoPdf.generateInspectionActa({});", json_str);
+                                                                                                    let _ = js_sys::eval(&script);
+                                                                                                }
+                                                                                            }
+                                                                                        >
+                                                                                            <i class="fa-solid fa-file-pdf text-xs"></i>
+                                                                                            <span>"PDF"</span>
+                                                                                        </button>
+                                                                                    }
+                                                                                })}
 
                                                                                 // 2. Historial / Auditoría
                                                                                 <button
@@ -3119,22 +3329,23 @@ pub fn AuthorityDashboard(
                         }.into_view()
                     })}
 
-                    // MODAL 6: ASIGNAR CUADRILLA / INSPECTOR
+                    // MODAL 6: ASIGNAR CUADRILLA / UNIDAD DE SERENAZGO
                     {move || assign_squad_target.get().map(|target| {
+                        let is_citizen_sec = target.is_citizen_security();
                         view! {
                             <div class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
                                 <div class="bg-white max-w-lg w-full rounded-2xl border border-slate-200 shadow-2xl p-6 space-y-4">
                                     <div class="flex items-start justify-between">
                                         <div class="flex items-center space-x-3">
                                             <div class="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center text-lg font-bold shadow-xs">
-                                                "👷"
+                                                {if is_citizen_sec { "🚓" } else { "👷" }}
                                             </div>
                                             <div>
                                                 <h3 class="font-bold text-slate-900 text-base leading-snug">
-                                                    "Asignar Cuadrilla / Inspector"
+                                                    {if is_citizen_sec { "Despachar Unidad de Serenazgo" } else { "Asignar Cuadrilla / Inspector" }}
                                                 </h3>
                                                 <p class="text-xs text-slate-500 font-medium">
-                                                    "El caso pasará al estado oficial \"En Inspección\""
+                                                    {if is_citizen_sec { "El incidente pasará al estado \"En Inspección / Patrullaje\"" } else { "El caso pasará al estado oficial \"En Inspección\"" }}
                                                 </p>
                                             </div>
                                         </div>
@@ -3162,28 +3373,39 @@ pub fn AuthorityDashboard(
 
                                     <div class="space-y-1">
                                         <label class="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
-                                            "Cuadrilla o Unidad Municipal:"
+                                            {if is_citizen_sec { "Unidad de Patrullaje / Serenazgo:" } else { "Cuadrilla o Unidad Municipal:" }}
                                         </label>
                                         <select
                                             class="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl font-medium focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-slate-900"
                                             prop:value=move || selected_squad.get()
                                             on:change=move |e| selected_squad.set(event_target_value(&e))
                                         >
-                                            <option value="Cuadrilla de Limpieza y Residuos Sólidos">"Cuadrilla de Limpieza y Residuos Sólidos"</option>
-                                            <option value="Equipo de Fiscalización Ambiental y Salubridad">"Equipo de Fiscalización Ambiental y Salubridad"</option>
-                                            <option value="Serenazgo y Patrullaje Ecológico">"Serenazgo y Patrullaje Ecológico"</option>
-                                            <option value="Unidad de Mantenimiento y Parques">"Unidad de Mantenimiento y Parques"</option>
-                                            <option value="Subgerencia de Gestión Ambiental (OEFA)">"Subgerencia de Gestión Ambiental (OEFA)"</option>
+                                            {if is_citizen_sec {
+                                                view! {
+                                                    <option value="Patrulla Motorizada de Serenazgo">"Patrulla Motorizada de Serenazgo"</option>
+                                                    <option value="Patrullaje Integrado Serenazgo + PNP">"Patrullaje Integrado Serenazgo + PNP"</option>
+                                                    <option value="Ronda Nocturna de Seguridad Ciudadana">"Ronda Nocturna de Seguridad Ciudadana"</option>
+                                                    <option value="Unidad de Intervención Rápida">"Unidad de Intervención Rápida"</option>
+                                                }.into_view()
+                                            } else {
+                                                view! {
+                                                    <option value="Cuadrilla de Limpieza y Residuos Sólidos">"Cuadrilla de Limpieza y Residuos Sólidos"</option>
+                                                    <option value="Equipo de Fiscalización Ambiental y Salubridad">"Equipo de Fiscalización Ambiental y Salubridad"</option>
+                                                    <option value="Serenazgo y Patrullaje Ecológico">"Serenazgo y Patrullaje Ecológico"</option>
+                                                    <option value="Unidad de Mantenimiento y Parques">"Unidad de Mantenimiento y Parques"</option>
+                                                    <option value="Subgerencia de Gestión Ambiental (OEFA)">"Subgerencia de Gestión Ambiental (OEFA)"</option>
+                                                }.into_view()
+                                            }}
                                         </select>
                                     </div>
 
                                     <div class="space-y-1">
                                         <label class="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
-                                            "Inspector o Responsable de Campo:"
+                                            {if is_citizen_sec { "Efectivo / Supervisor a Cargo:" } else { "Inspector o Responsable de Campo:" }}
                                         </label>
                                         <input
                                             type="text"
-                                            placeholder="Ej. Ing. Carlos Mendoza"
+                                            placeholder=if is_citizen_sec { "Ej. Cmdte. / Sup. de Turno Serenazgo" } else { "Ej. Ing. Carlos Mendoza" }
                                             class="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-slate-900 transition"
                                             prop:value=move || inspector_name.get()
                                             on:input=move |e| inspector_name.set(event_target_value(&e))
@@ -3323,6 +3545,39 @@ pub fn AuthorityDashboard(
                                 </div>
                             </div>
                         }
+                    })}
+
+                    // Modal de Evidencia Privada (Serenazgo)
+                    {move || private_evidence_modal.get().map(|(ev_title, imgs)| view! {
+                        <div class="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+                            <div class="bg-white rounded-2xl max-w-xl w-full p-5 shadow-2xl space-y-4">
+                                <div class="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                                    <div>
+                                        <span class="text-[10px] font-bold uppercase tracking-wider text-indigo-700">"🔒 Evidencia Privada Serenazgo"</span>
+                                        <h3 class="text-sm font-bold text-slate-900 truncate">{ev_title}</h3>
+                                    </div>
+                                    <button
+                                        class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-700 cursor-pointer"
+                                        on:click=move |_| private_evidence_modal.set(None)
+                                    >
+                                        "Cerrar"
+                                    </button>
+                                </div>
+                                {if imgs.is_empty() {
+                                    view! {
+                                        <p class="text-xs text-slate-500 py-6 text-center">"No se pudo cargar la evidencia o no hay archivos."</p>
+                                    }.into_view()
+                                } else {
+                                    view! {
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            {imgs.into_iter().map(|src| view! {
+                                                <img src=src class="w-full max-h-80 object-contain rounded-xl bg-slate-100 border border-slate-200" alt="Evidencia privada Serenazgo" />
+                                            }).collect_view()}
+                                        </div>
+                                    }.into_view()
+                                }}
+                            </div>
+                        </div>
                     })}
                 </div>
             }.into_view()

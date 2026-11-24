@@ -1,16 +1,21 @@
+use std::collections::HashMap;
 use leptos::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use crate::api::{alerts_url, analyze_evidence_url, upload_url};
+use crate::api::{
+    alerts_url, analyze_evidence_url, fetch_protected_image_blob_url,
+    is_protected_evidence_url, upload_private_url, upload_url,
+};
 use crate::geo::{find_nearby_active_alert, get_browser_gps_position, reverse_geocode};
 use crate::models::{
-    AuthUser, CreateAlertPayload, EcoAlert, EcoCategory, EcoDistrict, EcoSeverity,
+    AlertDomain, AuthUser, CreateAlertPayload, EcoAlert, EcoCategory, EcoDistrict, EcoSeverity,
     GeminiAnalysisResponse,
 };
 use crate::storage::{get_last_report_time, set_last_report_time};
 
 #[component]
 pub fn ReportDialog(
+    active_domain: RwSignal<AlertDomain>,
     alerts: RwSignal<Vec<EcoAlert>>,
     show_new_report_dialog: RwSignal<bool>,
     is_report_mode: RwSignal<bool>,
@@ -26,11 +31,26 @@ pub fn ReportDialog(
     let district = create_rw_signal(EcoDistrict::Chaupimarca);
 
     let photos = create_rw_signal(Vec::<String>::new());
+    let preview_urls = create_rw_signal(HashMap::<String, String>::new());
     let is_uploading_photo = create_rw_signal(false);
     let is_submitting = create_rw_signal(false);
     let error_message = create_rw_signal(None::<String>);
     let is_geocoding = create_rw_signal(false);
     let is_locating = create_rw_signal(false);
+
+    // Ajustar categoría por defecto al cambiar de mapa (Ambiental <-> Seguridad Ciudadana)
+    create_effect(move |_| {
+        let dom = active_domain.get();
+        let current_cat = category.get_untracked();
+        if current_cat.domain() != dom {
+            category.set(match dom {
+                AlertDomain::Ambiental => EcoCategory::Mineria,
+                AlertDomain::Ciudadana => EcoCategory::Seguridad,
+            });
+            photos.set(Vec::new());
+            preview_urls.set(HashMap::new());
+        }
+    });
 
     // Gemini AI Analysis state
     let is_analyzing_ai = create_rw_signal(false);
@@ -59,9 +79,11 @@ pub fn ReportDialog(
             is_analyzing_ai.set(true);
             ai_notice.set(None);
 
+            let dom = active_domain.get_untracked();
             spawn_local(async move {
                 let payload = serde_json::json!({
-                    "image_url": img_url
+                    "image_url": img_url,
+                    "domain": dom.as_str(),
                 });
 
                 let res = gloo_net::http::Request::post(&analyze_evidence_url())
@@ -73,6 +95,47 @@ pub fn ReportDialog(
                     if let Ok(resp) = req.send().await {
                         if resp.ok() {
                             if let Ok(data) = resp.json::<GeminiAnalysisResponse>().await {
+                                if dom == AlertDomain::Ciudadana {
+                                    if matches!(data.rejection_reason.as_deref(), Some("inappropriate") | Some("not_relevant")) {
+                                        is_blocked_by_ai.set(true);
+                                        let detail = data.technical_analysis.unwrap_or_else(|| {
+                                            "La fotografía no parece corresponder a un reporte ciudadano válido.".to_string()
+                                        });
+                                        ai_block_reason.set(Some(detail));
+                                        ai_notice.set(None);
+                                    } else {
+                                        is_blocked_by_ai.set(false);
+                                        ai_block_reason.set(None);
+                                        ai_notice.set(Some((
+                                            "✨ Evidencia privada analizada con IA: Título y categoría sugeridos (solo visible para Serenazgo).".to_string(),
+                                            "success".to_string(),
+                                        )));
+                                        if let Some(st) = data.suggested_title {
+                                            if !st.trim().is_empty() { title.set(st); }
+                                        }
+                                        if let Some(sd) = data.suggested_description {
+                                            if !sd.trim().is_empty() { description.set(sd); }
+                                        }
+                                        if let Some(cat_str) = data.category {
+                                            let c = cat_str.to_lowercase();
+                                            if c.contains("conviv") || c.contains("ebri") || c.contains("disturb") {
+                                                category.set(EcoCategory::Convivencia);
+                                            } else if c.contains("riesg") || c.contains("oscur") || c.contains("alumbr") {
+                                                category.set(EcoCategory::RiesgoUrbano);
+                                            } else {
+                                                category.set(EcoCategory::Seguridad);
+                                            }
+                                        }
+                                        if let Some(sev_str) = data.severity {
+                                            let s = sev_str.to_lowercase();
+                                            if s.contains("critico") { severity.set(EcoSeverity::Critico); }
+                                            else if s.contains("medio") { severity.set(EcoSeverity::Medio); }
+                                            else if s.contains("bajo") { severity.set(EcoSeverity::Bajo); }
+                                        }
+                                    }
+                                    is_analyzing_ai.set(false);
+                                    return;
+                                }
                                 // 1. Check minor litter filter (basura menor aislada)
                                 if data.is_minor_litter == Some(true)
                                     || data.rejection_reason.as_deref() == Some("minor_litter")
@@ -223,12 +286,23 @@ pub fn ReportDialog(
             error_message.set(None);
 
             let photos = photos.clone();
+            let preview_urls = preview_urls.clone();
             let error_message = error_message.clone();
             let is_uploading_photo = is_uploading_photo.clone();
             let analyze_photo_with_ai = analyze_photo_with_ai.clone();
+            let dom = active_domain.get_untracked();
+            let auth_token = current_user.get_untracked().map(|u| u.token).unwrap_or_default();
 
             spawn_local(async move {
-                let script = format!("window.ecoUpload.uploadFile('{}', '{}')", input_id, upload_url());
+                let target_upload_url = if dom == AlertDomain::Ciudadana {
+                    upload_private_url()
+                } else {
+                    upload_url()
+                };
+                let script = format!(
+                    "window.ecoUpload.uploadFile('{}', '{}', '{}')",
+                    input_id, target_upload_url, auth_token
+                );
                 match js_sys::eval(&script) {
                     Ok(promise_val) => {
                         let promise = js_sys::Promise::from(promise_val);
@@ -237,6 +311,18 @@ pub fn ReportDialog(
                                 if let Some(url_str) = val.as_string() {
                                     let is_first = photos.get_untracked().is_empty();
                                     photos.update(|p| p.push(url_str.clone()));
+                                    if is_protected_evidence_url(&url_str) && !auth_token.is_empty() {
+                                        let u_key = url_str.clone();
+                                        let tok = auth_token.clone();
+                                        let previews = preview_urls.clone();
+                                        spawn_local(async move {
+                                            if let Ok(blob_url) = fetch_protected_image_blob_url(&u_key, &tok).await {
+                                                previews.update(|m| {
+                                                    m.insert(u_key, blob_url);
+                                                });
+                                            }
+                                        });
+                                    }
                                     if is_first {
                                         analyze_photo_with_ai(url_str);
                                     }
@@ -372,6 +458,7 @@ pub fn ReportDialog(
         let img2 = photo_list.get(1).cloned();
 
         let payload = CreateAlertPayload {
+            domain: Some(active_domain.get()),
             title: t.trim().to_string(),
             description: if d.trim().is_empty() {
                 "Reporte ciudadano sin descripción extendida.".to_string()
@@ -415,6 +502,7 @@ pub fn ReportDialog(
                             title.set("".to_string());
                             description.set("".to_string());
                             photos.set(Vec::new());
+                            preview_urls.set(HashMap::new());
                             is_blocked_by_ai.set(false);
                             ai_block_reason.set(None);
                             ai_notice.set(None);
@@ -480,9 +568,19 @@ pub fn ReportDialog(
                         <div class="flex items-center justify-between border-b border-slate-100 pb-3">
                             <div>
                                 <h2 class="text-base font-bold text-slate-900">
-                                    "Registrar Nuevo Incidente Ambiental"
+                                    {move || if active_domain.get() == AlertDomain::Ciudadana {
+                                        "Reportar Alerta de Seguridad Ciudadana"
+                                    } else {
+                                        "Registrar Nuevo Incidente Ambiental"
+                                    }}
                                 </h2>
-                                <p class="text-[11px] text-slate-500 font-medium">"Cerro de Pasco · Fiscalización Ciudadana"</p>
+                                <p class="text-[11px] text-slate-500 font-medium">
+                                    {move || if active_domain.get() == AlertDomain::Ciudadana {
+                                        "Cerro de Pasco · Se publica como Vecino Anónimo · Expira en 6h"
+                                    } else {
+                                        "Cerro de Pasco · Fiscalización Ciudadana"
+                                    }}
+                                </p>
                             </div>
                             <button
                                 class="text-slate-400 hover:text-slate-700 p-1 rounded-lg hover:bg-slate-100 transition"
@@ -530,6 +628,25 @@ pub fn ReportDialog(
                                         {format!("Existe una alerta activa en esta zona (\"{title}\"). Evitemos duplicar incidentes.", title = dup_alert.title)}
                                     </p>
                                 </div>
+                            </div>
+                        })}
+
+                        // Banner de Privacidad y 105 (solo en Mapa de Seguridad Ciudadana)
+                        {move || (active_domain.get() == AlertDomain::Ciudadana).then(|| view! {
+                            <div class="p-3 bg-indigo-50/90 rounded-2xl border border-indigo-200/90 text-[11px] text-indigo-950 space-y-1">
+                                <div class="font-bold flex items-center space-x-1.5">
+                                    <span>"🛡️"</span>
+                                    <span>"Anonimato Garantizado + Evidencia Privada"</span>
+                                </div>
+                                <p class="leading-relaxed text-indigo-900/90">
+                                    "Tu cuenta valida el reporte internamente, pero en el mapa se publicará como "
+                                    <b>"Vecino Anónimo"</b>
+                                    ". Si adjuntas fotos, serán visibles "
+                                    <b>"solo para Serenazgo"</b>
+                                    ". La alerta expirará automáticamente en 6 horas. Ante peligro inmediato llama al "
+                                    <b>"105 (PNP)"</b>
+                                    "."
+                                </p>
                             </div>
                         })}
 
@@ -581,7 +698,11 @@ pub fn ReportDialog(
                             </div>
 
                             <p class="text-[11px] text-slate-500 leading-relaxed">
-                                "Sube la fotografía del incidente. Google Gemini Vision AI analizará la gravedad y autocompletará los detalles automáticamente."
+                                {move || if active_domain.get() == AlertDomain::Ciudadana {
+                                    "Foto opcional y privada: solo personal autorizado de Serenazgo podrá verla (nunca el público)."
+                                } else {
+                                    "Sube la fotografía del incidente. Google Gemini Vision AI analizará la gravedad y autocompletará los detalles automáticamente."
+                                }}
                             </p>
 
                             // Photo Slots & Upload Grid - Pure Symmetrical Layout
@@ -589,6 +710,14 @@ pub fn ReportDialog(
                                 // Slot 1 & 2 Photos
                                 {move || photos.get().into_iter().enumerate().map(|(idx, url)| {
                                     let is_first = idx == 0;
+                                    let url_for_src = url.clone();
+                                    let display_src = move || {
+                                        preview_urls
+                                            .get()
+                                            .get(&url_for_src)
+                                            .cloned()
+                                            .unwrap_or_else(|| url_for_src.clone())
+                                    };
                                     view! {
                                         <div class=move || {
                                             if is_first && is_analyzing_ai.get() {
@@ -597,7 +726,7 @@ pub fn ReportDialog(
                                                 "relative aspect-square w-full rounded-2xl overflow-hidden border border-slate-200 bg-slate-100 shadow-2xs"
                                             }
                                         }>
-                                            <img src=url.clone() alt="Evidencia" class="w-full h-full object-cover" />
+                                            <img src=display_src alt="Evidencia" class="w-full h-full object-cover" />
 
                                             // Scanning Overlay
                                             {move || (is_first && is_analyzing_ai.get()).then(|| view! {
@@ -884,7 +1013,7 @@ pub fn ReportDialog(
                                         "Categoría de Impacto"
                                     </label>
                                     <div class="grid grid-cols-2 gap-2">
-                                        {EcoCategory::all().iter().map(|&cat| {
+                                        {move || EcoCategory::for_domain(active_domain.get()).iter().map(|&cat| {
                                             let is_sel = move || category.get() == cat;
                                             view! {
                                                 <button

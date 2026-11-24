@@ -1,17 +1,53 @@
 import re
+from datetime import timedelta
 
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
-from .models import Alert, WastePoint, SystemConfig, Truck, CollectionRoute, RouteStop, RouteRun
+from .models import (
+    Alert,
+    WastePoint,
+    SystemConfig,
+    Truck,
+    CollectionRoute,
+    RouteStop,
+    RouteRun,
+    is_serenazgo,
+)
+
+
+def _validate_evidence_ref(value):
+    if not value:
+        return value
+    v = str(value).strip()
+    if v.startswith('http://') or v.startswith('https://') or v.startswith('/api/evidence/private/'):
+        return v
+    raise serializers.ValidationError('Introduzca una URL o ruta de evidencia válida.')
+
 
 class AlertSerializer(serializers.ModelSerializer):
     reporter_name = serializers.CharField(source='reported_by.username', read_only=True, default='Ciudadano')
     has_user_confirmed = serializers.SerializerMethodField()
+    has_private_evidence = serializers.SerializerMethodField()
+    image_url = serializers.CharField(
+        max_length=500, required=False, allow_blank=True, allow_null=True, validators=[_validate_evidence_ref]
+    )
+    image_url_2 = serializers.CharField(
+        max_length=500, required=False, allow_blank=True, allow_null=True, validators=[_validate_evidence_ref]
+    )
 
     class Meta:
         model = Alert
         exclude = ('confirmed_by',)
-        read_only_fields = ('created_at', 'history_log', 'reported_by', 'resolved_at', 'confirmations_count')
+        read_only_fields = (
+            'created_at',
+            'history_log',
+            'reported_by',
+            'resolved_at',
+            'confirmations_count',
+            'is_anonymous_public',
+            'hide_media_public',
+        )
 
     def get_has_user_confirmed(self, obj):
         confirmed_ids = self.context.get('confirmed_alert_ids')
@@ -21,6 +57,54 @@ class AlertSerializer(serializers.ModelSerializer):
         if request and hasattr(request, 'user') and request.user.is_authenticated:
             return obj.confirmed_by.filter(id=request.user.id).exists()
         return False
+
+    def get_has_private_evidence(self, obj):
+        return bool(obj.hide_media_public and (obj.image_url or obj.image_url_2))
+
+    def validate(self, attrs):
+        category = attrs.get('category') or (self.instance.category if self.instance else None)
+        if category in Alert.CITIZEN_CATEGORIES:
+            attrs['domain'] = 'ciudadana'
+        elif category in Alert.ENVIRONMENTAL_CATEGORIES:
+            attrs['domain'] = 'ambiental'
+
+        if attrs.get('domain') == 'ciudadana':
+            max_exp = timezone.now() + timedelta(hours=Alert.CITIZEN_TTL_HOURS)
+            req_exp = attrs.get('expires_at')
+            if req_exp is None or req_exp > max_exp:
+                attrs['expires_at'] = max_exp
+        return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        if instance.is_anonymous_public or instance.domain == 'ciudadana':
+            data['reporter_name'] = 'Vecino Anónimo'
+            data['reported_by'] = None
+
+        if instance.hide_media_public:
+            request = self.context.get('request')
+            user = getattr(request, 'user', None) if request else None
+            allow_private = bool(
+                self.context.get('include_private_citizen_fields')
+                and user
+                and user.is_authenticated
+                and (
+                    user.is_superuser
+                    or is_serenazgo(user)
+                    or (instance.reported_by_id and instance.reported_by_id == user.id)
+                )
+            )
+            if allow_private:
+                for slot, field in ((1, 'image_url'), (2, 'image_url_2')):
+                    if getattr(instance, field):
+                        rel = f"/api/alerts/{instance.id}/evidence/{slot}/"
+                        data[field] = request.build_absolute_uri(rel) if request else rel
+            else:
+                data['image_url'] = None
+                data['image_url_2'] = None
+
+        return data
 
 
 class WastePointSerializer(serializers.ModelSerializer):

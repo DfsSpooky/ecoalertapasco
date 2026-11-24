@@ -28,7 +28,7 @@ use components::{
     waste_list_modal::WasteListModal,
 };
 use models::{
-    CollectionRoute, EcoAlert, TruckRun, EcoCategory, EcoDistrict, EcoSeverity, SyncResponse, SyncStatus, WastePoint,
+    AlertDomain, CollectionRoute, EcoAlert, TruckRun, EcoCategory, EcoDistrict, EcoSeverity, SyncResponse, SyncStatus, WastePoint,
     WsServerMessage,
 };
 use storage::{clear_auth_session, load_auth_session};
@@ -49,11 +49,25 @@ impl ActiveWsConnection {
     }
 }
 
+fn detect_initial_domain() -> AlertDomain {
+    if let Some(win) = web_sys::window() {
+        if let Ok(search) = win.location().search() {
+            let s = search.to_lowercase();
+            if s.contains("vista=ciudadana") || s.contains("vista=seguridad") {
+                return AlertDomain::Ciudadana;
+            }
+        }
+    }
+    AlertDomain::Ambiental
+}
+
 #[component]
 fn App() -> impl IntoView {
     // Production state: initialized strictly empty (zero mocks or assumptions; truth comes from server)
+    let initial_domain = detect_initial_domain();
+    let active_domain = create_rw_signal(initial_domain);
     let alerts = create_rw_signal(Vec::<EcoAlert>::new());
-    let selected_categories = create_rw_signal(HashSet::from_iter(EcoCategory::all().iter().copied()));
+    let selected_categories = create_rw_signal(HashSet::from_iter(EcoCategory::for_domain(initial_domain).iter().copied()));
     let selected_severities = create_rw_signal(HashSet::from_iter(EcoSeverity::all().iter().copied()));
     let selected_district = create_rw_signal(None::<EcoDistrict>);
     let search_query = create_rw_signal("".to_string());
@@ -325,6 +339,7 @@ fn App() -> impl IntoView {
                             if has_completed_initial_sync.get_untracked()
                                 && incoming.severity == EcoSeverity::Critico
                                 && incoming.status == "pending"
+                                && incoming.category.domain() == active_domain.get_untracked()
                                 && !is_own
                             {
                                 active_emergency_alert.set(Some(incoming.clone()));
@@ -648,8 +663,56 @@ fn App() -> impl IntoView {
         })
     };
 
-    // Reactive memo for filtered alerts
+    // Sincronizar cambio de mapa apartado (Ambiental <-> Seguridad Ciudadana) con URL y capas
+    let ttl_tick = create_rw_signal(0u32);
+    {
+        let tick_cb = Closure::<dyn FnMut()>::new(move || {
+            ttl_tick.update(|n| *n = n.wrapping_add(1));
+        });
+        if let Some(win) = web_sys::window() {
+            let _ = win.set_interval_with_callback_and_timeout_and_arguments_0(
+                tick_cb.as_ref().unchecked_ref(),
+                60_000,
+            );
+        }
+        tick_cb.forget();
+    }
+
+    create_effect(move |_| {
+        let dom = active_domain.get();
+        selected_categories.set(HashSet::from_iter(EcoCategory::for_domain(dom).iter().copied()));
+        if dom == AlertDomain::Ciudadana {
+            show_waste_layer.set(false);
+            show_waste_list_modal.set(false);
+            selected_waste_point_id.set(None);
+        }
+        if let Some(sel_id) = selected_alert_id.get_untracked() {
+            let matches_dom = alerts.with_untracked(|list| {
+                list.iter()
+                    .find(|a| a.id == sel_id)
+                    .map(|a| a.category.domain() == dom)
+                    .unwrap_or(false)
+            });
+            if !matches_dom {
+                selected_alert_id.set(None);
+            }
+        }
+        if let Some(win) = web_sys::window() {
+            if let Ok(hist) = win.history() {
+                let query = if dom == AlertDomain::Ciudadana {
+                    "?vista=ciudadana"
+                } else {
+                    "?vista=ambiental"
+                };
+                let _ = hist.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(query));
+            }
+        }
+    });
+
+    // Reactive memo for filtered alerts (separado por mapa/dominio y excluyendo efímeras expiradas)
     let filtered_alerts = create_memo(move |_| {
+        let _ = ttl_tick.get();
+        let dom = active_domain.get();
         let all = alerts.get();
         let cats = selected_categories.get();
         let sevs = selected_severities.get();
@@ -659,6 +722,8 @@ fn App() -> impl IntoView {
         let days = days_filter.get();
 
         all.into_iter()
+            .filter(|a| a.category.domain() == dom)
+            .filter(|a| !a.is_expired())
             .filter(|a| cats.contains(&a.category))
             .filter(|a| sevs.contains(&a.severity))
             .filter(|a| dist.map_or(true, |d| a.district == d))
@@ -713,6 +778,7 @@ fn App() -> impl IntoView {
 
             // Command Center Sidebar
             <Sidebar
+                active_domain=active_domain
                 alerts=alerts
                 filtered_alerts=filtered_alerts
                 selected_categories=selected_categories
@@ -736,6 +802,7 @@ fn App() -> impl IntoView {
 
             // Map View
             <MapView
+                active_domain=active_domain
                 filtered_alerts=filtered_alerts
                 selected_alert_id=selected_alert_id
                 is_report_mode=is_report_mode
@@ -797,6 +864,7 @@ fn App() -> impl IntoView {
 
             // Authority Dashboard with SLA & Action Handlers
             <AuthorityDashboard
+                active_domain=active_domain
                 alerts=alerts
                 waste_points=waste_points
                 show_dashboard=show_authority_dashboard
@@ -811,6 +879,7 @@ fn App() -> impl IntoView {
 
             // Report Incident Dialog
             <ReportDialog
+                active_domain=active_domain
                 alerts=alerts
                 show_new_report_dialog=show_new_report_dialog
                 is_report_mode=is_report_mode
@@ -858,17 +927,28 @@ fn App() -> impl IntoView {
                     <span class="text-[9px] font-bold mt-0.5">"Mapa"</span>
                 </button>
 
-                // 2. Acopio & Reciclaje
-                <button
-                    class="flex flex-col items-center justify-center py-0.5 px-2.5 rounded-xl text-slate-600 hover:text-emerald-700 active:scale-90 transition cursor-pointer"
-                    on:click=move |_| {
-                        show_waste_layer.set(true);
-                        show_waste_list_modal.set(true);
-                    }
-                >
-                    <i class="fa-solid fa-recycle text-sm text-teal-600"></i>
-                    <span class="text-[9px] font-bold mt-0.5">"Acopio"</span>
-                </button>
+                // 2. Acopio (en Ambiental) o Cambiar a Ambiental (en Seguridad)
+                {move || if active_domain.get() == AlertDomain::Ciudadana {
+                    view! {
+                        <button
+                            class="flex flex-col items-center justify-center py-0.5 px-2.5 rounded-xl text-indigo-700 hover:text-emerald-700 active:scale-90 transition cursor-pointer"
+                            on:click=move |_| active_domain.set(AlertDomain::Ambiental)
+                        >
+                            <i class="fa-solid fa-leaf text-sm text-emerald-600"></i>
+                            <span class="text-[9px] font-bold mt-0.5">"EcoAlerta"</span>
+                        </button>
+                    }.into_view()
+                } else {
+                    view! {
+                        <button
+                            class="flex flex-col items-center justify-center py-0.5 px-2.5 rounded-xl text-slate-600 hover:text-indigo-700 active:scale-90 transition cursor-pointer"
+                            on:click=move |_| active_domain.set(AlertDomain::Ciudadana)
+                        >
+                            <i class="fa-solid fa-shield-halved text-sm text-indigo-600"></i>
+                            <span class="text-[9px] font-bold mt-0.5">"Seguridad"</span>
+                        </button>
+                    }.into_view()
+                }}
 
                 // 3. Botón Central Hero Elevado: DENUNCIAR / CONFIRMAR
                 <button

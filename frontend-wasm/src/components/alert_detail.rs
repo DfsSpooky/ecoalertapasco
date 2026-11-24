@@ -1,5 +1,5 @@
 use leptos::*;
-use crate::api::confirm_alert_url;
+use crate::api::{alert_evidence_url, confirm_alert_url, fetch_protected_image_blob_url};
 use crate::models::{AuthUser, ConfirmResponse, EcoAlert, EcoCategory, EcoSeverity};
 
 fn render_category_svg(cat: EcoCategory) -> View {
@@ -28,6 +28,25 @@ fn render_category_svg(cat: EcoCategory) -> View {
                 <path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/>
                 <path d="M9.6 4.6A2 2 0 1 1 11 8H2"/>
                 <path d="M12.6 19.4A2 2 0 1 0 14 16H2"/>
+            </svg>
+        }.into_view(),
+        EcoCategory::Seguridad => view! {
+            <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+        }.into_view(),
+        EcoCategory::Convivencia => view! {
+            <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 9v4"/>
+                <path d="M12 17h.01"/>
+                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            </svg>
+        }.into_view(),
+        EcoCategory::RiesgoUrbano => view! {
+            <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 18h6"/>
+                <path d="M10 22h4"/>
+                <path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2z"/>
             </svg>
         }.into_view(),
     }
@@ -144,6 +163,7 @@ pub fn AlertDetail(
     let is_confirming = create_rw_signal(false);
     let lightbox_image = create_rw_signal(None::<String>);
     let show_history_modal = create_rw_signal(false);
+    let private_photos = create_rw_signal(Vec::<String>::new());
 
     let history_dialog_ref = create_node_ref::<leptos::html::Dialog>();
     let history_pressed_outside = create_rw_signal(false);
@@ -155,6 +175,30 @@ pub fn AlertDetail(
 
     let active_alert_id = create_memo(move |_| {
         selected_alert.with(|opt| opt.as_ref().map(|a| a.id.clone()))
+    });
+
+    // Cargar evidencia privada protegida exclusivamente cuando el usuario es Serenazgo/Superadmin
+    create_effect(move |_| {
+        let alert_opt = selected_alert.get();
+        let user_opt = current_user.get();
+        private_photos.set(Vec::new());
+
+        if let (Some(a), Some(u)) = (alert_opt, user_opt) {
+            if a.has_private_evidence && u.can_manage_ciudadana() {
+                let alert_id = a.id.clone();
+                let token = u.token.clone();
+                spawn_local(async move {
+                    let mut loaded = Vec::new();
+                    for slot in [1u8, 2u8] {
+                        let url = alert_evidence_url(&alert_id, slot);
+                        if let Ok(blob_url) = fetch_protected_image_blob_url(&url, &token).await {
+                            loaded.push(blob_url);
+                        }
+                    }
+                    private_photos.set(loaded);
+                });
+            }
+        }
     });
 
     // Sync Bitácora <dialog> with show_history_modal signal
@@ -234,6 +278,11 @@ pub fn AlertDetail(
             let district_label = a.district.display_name();
             let category_enum = a.category;
 
+            let is_citizen_sec = a.is_citizen_security();
+            let ttl_badge = if is_citizen_sec { a.remaining_ttl_label() } else { None };
+            let has_private_ev = a.has_private_evidence;
+            let hide_media_pub = a.hide_media_public;
+
             let photo1 = a.image_url.clone();
             let photo2 = a.image_url_2.clone();
 
@@ -267,6 +316,13 @@ pub fn AlertDetail(
                                     {render_category_svg(category_enum)}
                                     <span>{category_enum.display_name()}</span>
                                 </span>
+
+                                {ttl_badge.clone().map(|ttl| view! {
+                                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200 text-[10.5px] font-semibold">
+                                        <span>"⏱️"</span>
+                                        <span>{ttl}</span>
+                                    </span>
+                                })}
 
                                 {move || is_solved_live().then(|| view! {
                                     <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#34C759]/14 text-[#00704E] ring-1 ring-inset ring-[#34C759]/28 text-[11px] font-semibold">
@@ -302,67 +358,111 @@ pub fn AlertDetail(
                             {a.description}
                         </p>
 
-                        // Citizen Photo Gallery (1 or 2 photos)
-                        {match (photo1.clone(), photo2.clone()) {
-                            (Some(u1), Some(u2)) => {
-                                let u1_c = u1.clone();
-                                let u2_c = u2.clone();
-                                view! {
-                                    <div class="grid grid-cols-2 gap-2">
+                        // Citizen Photo Gallery (1 or 2 photos) or Protected Serenazgo Evidence
+                        {if hide_media_pub {
+                            view! {
+                                {move || {
+                                    let priv_imgs = private_photos.get();
+                                    if !priv_imgs.is_empty() {
+                                        view! {
+                                            <div class="space-y-1.5">
+                                                <div class="flex items-center space-x-1.5 text-[11px] font-semibold text-indigo-700">
+                                                    <span>"🔓"</span>
+                                                    <span>"Evidencia privada visible para Serenazgo"</span>
+                                                </div>
+                                                <div class={if priv_imgs.len() > 1 { "grid grid-cols-2 gap-2" } else { "grid grid-cols-1" }}>
+                                                    {priv_imgs.into_iter().enumerate().map(|(idx, blob_url)| {
+                                                        let b_click = blob_url.clone();
+                                                        view! {
+                                                            <button
+                                                                type="button"
+                                                                class="relative aspect-[16/9] w-full rounded-[16px] overflow-hidden bg-[#F5F5F7] ring-1 ring-indigo-200 cursor-pointer group block"
+                                                                on:click=move |_| lightbox_image.set(Some(b_click.clone()))
+                                                            >
+                                                                <img src=blob_url alt=format!("Evidencia privada {}", idx + 1) class="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300" />
+                                                                <span class="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-indigo-900/75 text-[10px] font-medium text-white">
+                                                                    {format!("Privada {}", idx + 1)}
+                                                                </span>
+                                                            </button>
+                                                        }
+                                                    }).collect_view()}
+                                                </div>
+                                            </div>
+                                        }.into_view()
+                                    } else if has_private_ev {
+                                        view! {
+                                            <div class="p-3 rounded-2xl bg-indigo-50/80 border border-indigo-200/80 text-indigo-900 text-xs flex items-center space-x-2.5">
+                                                <span class="text-base shrink-0">"🔒"</span>
+                                                <span>"Evidencia fotográfica adjunta de forma privada (visible exclusivamente para Serenazgo)."</span>
+                                            </div>
+                                        }.into_view()
+                                    } else {
+                                        view! { <span class="hidden"></span> }.into_view()
+                                    }
+                                }}
+                            }.into_view()
+                        } else {
+                            match (photo1.clone(), photo2.clone()) {
+                                (Some(u1), Some(u2)) => {
+                                    let u1_c = u1.clone();
+                                    let u2_c = u2.clone();
+                                    view! {
+                                        <div class="grid grid-cols-2 gap-2">
+                                            <button
+                                                type="button"
+                                                aria-label="Ampliar evidencia fotográfica 1"
+                                                class="relative aspect-[4/3] w-full rounded-[16px] overflow-hidden bg-[#F5F5F7] ring-1 ring-black/[0.06] cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+                                                on:click=move |_| lightbox_image.set(Some(u1_c.clone()))
+                                            >
+                                                <img src=u1 alt="Evidencia fotográfica 1" class="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300" />
+                                                <span class="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/55 backdrop-blur-md text-[10px] font-medium text-white flex items-center gap-1">
+                                                    <svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                                        <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+                                                        <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+                                                    </svg>
+                                                    "Foto 1"
+                                                </span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                aria-label="Ampliar evidencia fotográfica 2"
+                                                class="relative aspect-[4/3] w-full rounded-[16px] overflow-hidden bg-[#F5F5F7] ring-1 ring-black/[0.06] cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+                                                on:click=move |_| lightbox_image.set(Some(u2_c.clone()))
+                                            >
+                                                <img src=u2 alt="Evidencia fotográfica 2" class="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300" />
+                                                <span class="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/55 backdrop-blur-md text-[10px] font-medium text-white flex items-center gap-1">
+                                                    <svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                                        <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+                                                        <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+                                                    </svg>
+                                                    "Foto 2"
+                                                </span>
+                                            </button>
+                                        </div>
+                                    }.into_view()
+                                }
+                                (Some(u1), None) | (None, Some(u1)) => {
+                                    let u1_c = u1.clone();
+                                    view! {
                                         <button
                                             type="button"
-                                            aria-label="Ampliar evidencia fotográfica 1"
-                                            class="relative aspect-[4/3] w-full rounded-[16px] overflow-hidden bg-[#F5F5F7] ring-1 ring-black/[0.06] cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+                                            aria-label="Ampliar fotografía de evidencia"
+                                            class="relative aspect-[16/9] w-full rounded-[16px] overflow-hidden bg-[#F5F5F7] ring-1 ring-black/[0.06] cursor-pointer group block focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
                                             on:click=move |_| lightbox_image.set(Some(u1_c.clone()))
                                         >
-                                            <img src=u1 alt="Evidencia fotográfica 1" class="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300" />
-                                            <span class="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/55 backdrop-blur-md text-[10px] font-medium text-white flex items-center gap-1">
-                                                <svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                            <img src=u1 alt="Evidencia fotográfica del incidente" class="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300" />
+                                            <span class="absolute bottom-2 right-2 px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-md text-[10.5px] font-medium text-white flex items-center gap-1">
+                                                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
                                                     <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
                                                     <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
                                                 </svg>
-                                                "Foto 1"
+                                                "Ampliar"
                                             </span>
                                         </button>
-                                        <button
-                                            type="button"
-                                            aria-label="Ampliar evidencia fotográfica 2"
-                                            class="relative aspect-[4/3] w-full rounded-[16px] overflow-hidden bg-[#F5F5F7] ring-1 ring-black/[0.06] cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
-                                            on:click=move |_| lightbox_image.set(Some(u2_c.clone()))
-                                        >
-                                            <img src=u2 alt="Evidencia fotográfica 2" class="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300" />
-                                            <span class="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/55 backdrop-blur-md text-[10px] font-medium text-white flex items-center gap-1">
-                                                <svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-                                                    <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
-                                                    <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
-                                                </svg>
-                                                "Foto 2"
-                                            </span>
-                                        </button>
-                                    </div>
-                                }.into_view()
+                                    }.into_view()
+                                }
+                                (None, None) => view! { <span class="hidden"></span> }.into_view(),
                             }
-                            (Some(u1), None) | (None, Some(u1)) => {
-                                let u1_c = u1.clone();
-                                view! {
-                                    <button
-                                        type="button"
-                                        aria-label="Ampliar fotografía de evidencia"
-                                        class="relative aspect-[16/9] w-full rounded-[16px] overflow-hidden bg-[#F5F5F7] ring-1 ring-black/[0.06] cursor-pointer group block focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
-                                        on:click=move |_| lightbox_image.set(Some(u1_c.clone()))
-                                    >
-                                        <img src=u1 alt="Evidencia fotográfica del incidente" class="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300" />
-                                        <span class="absolute bottom-2 right-2 px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-md text-[10.5px] font-medium text-white flex items-center gap-1">
-                                            <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
-                                                <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
-                                                <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
-                                            </svg>
-                                            "Ampliar"
-                                        </span>
-                                    </button>
-                                }.into_view()
-                            }
-                            (None, None) => view! { <span class="hidden"></span> }.into_view(),
                         }}
 
                         // Municipal Remediation Banner (When Solved)
@@ -513,25 +613,27 @@ pub fn AlertDetail(
                             </span>
                         </button>
 
-                        // 3-Column Equal-Width Apple Maps Quick Actions (Acta, Bitácora, WhatsApp)
-                        <div class="apple-inspector-actions grid grid-cols-3 gap-2">
-                            <button
-                                type="button"
-                                class="h-9 px-2.5 rounded-[11px] bg-[#F5F5F7] hover:bg-[#E8E8ED] active:scale-[0.97] text-[#1D1D1F] ring-1 ring-inset ring-black/[0.05] flex items-center justify-center gap-1.5 text-[12px] font-semibold tracking-[-0.01em] transition-all cursor-pointer"
-                                title="Generar o imprimir Acta Oficial de Fiscalización"
-                                on:click=move |_| {
-                                    if let Some(cur) = selected_alert.get_untracked() {
-                                        inspection_target.set(Some(cur));
+                        // Quick Actions (Acta solo para Ambiental; Bitácora y WhatsApp para ambos)
+                        <div class={if is_citizen_sec { "apple-inspector-actions grid grid-cols-2 gap-2" } else { "apple-inspector-actions grid grid-cols-3 gap-2" }}>
+                            {(!is_citizen_sec).then(|| view! {
+                                <button
+                                    type="button"
+                                    class="h-9 px-2.5 rounded-[11px] bg-[#F5F5F7] hover:bg-[#E8E8ED] active:scale-[0.97] text-[#1D1D1F] ring-1 ring-inset ring-black/[0.05] flex items-center justify-center gap-1.5 text-[12px] font-semibold tracking-[-0.01em] transition-all cursor-pointer"
+                                    title="Generar o imprimir Acta Oficial de Fiscalización"
+                                    on:click=move |_| {
+                                        if let Some(cur) = selected_alert.get_untracked() {
+                                            inspection_target.set(Some(cur));
+                                        }
                                     }
-                                }
-                            >
-                                <svg class="w-3.5 h-3.5 text-[#007AFF] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                                    <polyline points="14 2 14 8 20 8"/>
-                                    <path d="m9 15 2 2 4-4"/>
-                                </svg>
-                                <span>"Acta"</span>
-                            </button>
+                                >
+                                    <svg class="w-3.5 h-3.5 text-[#007AFF] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                        <polyline points="14 2 14 8 20 8"/>
+                                        <path d="m9 15 2 2 4-4"/>
+                                    </svg>
+                                    <span>"Acta"</span>
+                                </button>
+                            })}
 
                             <button
                                 type="button"

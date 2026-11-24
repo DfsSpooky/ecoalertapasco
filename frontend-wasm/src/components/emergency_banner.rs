@@ -22,7 +22,7 @@ pub fn EmergencyBanner(
             let a_for_acta = alert.clone();
 
             view! {
-                <div class="absolute top-3.5 left-1/2 -translate-x-1/2 z-30 max-w-2xl w-11/12 animate-in slide-in-from-top duration-300 pointer-events-auto">
+                <div class="absolute top-24 md:top-14 left-1/2 -translate-x-1/2 z-30 max-w-2xl w-11/12 animate-in slide-in-from-top duration-300 pointer-events-auto">
                     <div class="bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white rounded-2xl p-3 sm:p-4 shadow-[0_12px_36px_rgba(220,38,38,0.4)] border-2 border-white/80 flex items-center justify-between gap-3">
                         <div class="flex items-center space-x-3 min-w-0">
                             <div class="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center text-xl shrink-0 animate-bounce">

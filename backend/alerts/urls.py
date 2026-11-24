@@ -10,6 +10,7 @@ from .views import (
     SystemSettingsView,
     TestGeminiView,
     AnalyzeEvidenceAIView,
+    PrivateEvidenceFetchView,
     UserProfileView,
     PublicAlertVerificationView,
     HealthCheckView,
@@ -27,6 +28,7 @@ router.register(r'runs', RouteRunViewSet, basename='route-run')
 urlpatterns = [
     path('sync/', SyncMapDataView.as_view(), name='sync_map_data'),
     path('health/', HealthCheckView.as_view(), name='health_check'),
+    path('evidence/private/<str:filename>', PrivateEvidenceFetchView.as_view(), name='private_evidence_fetch'),
     path('auth/profile/', UserProfileView.as_view(), name='user_profile'),
     path('auth/google/', GoogleAuthView.as_view(), name='alert_google_auth'),
     path('auth/google/config/', GoogleAuthConfigView.as_view(), name='alert_google_auth_config'),

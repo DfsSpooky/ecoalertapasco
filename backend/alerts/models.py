@@ -1,13 +1,28 @@
+from datetime import timedelta
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
+
 
 class Alert(models.Model):
+    DOMAIN_CHOICES = [
+        ('ambiental', 'Ambiental'),
+        ('ciudadana', 'Seguridad Ciudadana'),
+    ]
+
     CATEGORY_CHOICES = [
         ('mineria', 'Minería'),
         ('basura', 'Basura'),
         ('agua', 'Agua'),
         ('aire', 'Aire'),
+        ('seguridad', 'Delincuencia / Robo'),
+        ('convivencia', 'Ebrios / Disturbios'),
+        ('riesgo_urbano', 'Zona Oscura / Peligro'),
     ]
+
+    ENVIRONMENTAL_CATEGORIES = {'mineria', 'basura', 'agua', 'aire'}
+    CITIZEN_CATEGORIES = {'seguridad', 'convivencia', 'riesgo_urbano'}
+    CITIZEN_TTL_HOURS = 6
     
     SEVERITY_CHOICES = [
         ('critico', 'Crítico'),
@@ -28,6 +43,7 @@ class Alert(models.Model):
         ('dismissed', 'Descartada'),
     ]
 
+    domain = models.CharField(max_length=20, choices=DOMAIN_CHOICES, default='ambiental', db_index=True)
     title = models.CharField(max_length=200)
     description = models.TextField()
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
@@ -41,6 +57,9 @@ class Alert(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     image_url = models.URLField(max_length=500, blank=True, null=True, verbose_name="Primera Foto de Evidencia")
     image_url_2 = models.URLField(max_length=500, blank=True, null=True, verbose_name="Segunda Foto de Evidencia")
+    is_anonymous_public = models.BooleanField(default=False, verbose_name="Ocultar denunciante al público")
+    hide_media_public = models.BooleanField(default=False, verbose_name="Evidencia privada (solo Serenazgo)")
+    expires_at = models.DateTimeField(blank=True, null=True, db_index=True, verbose_name="Expira del mapa público")
     
     # Usuario que reportó la alerta (requerido para dar trazabilidad al ciudadano)
     reported_by = models.ForeignKey(
@@ -67,12 +86,35 @@ class Alert(models.Model):
     resolved_at = models.DateTimeField(blank=True, null=True)
     history_log = models.TextField(blank=True, null=True)
 
+    def save(self, *args, **kwargs):
+        if self.category in self.CITIZEN_CATEGORIES:
+            self.domain = 'ciudadana'
+        elif self.category in self.ENVIRONMENTAL_CATEGORIES:
+            self.domain = 'ambiental'
+
+        if self.domain == 'ciudadana':
+            # En Seguridad Ciudadana: anonimato público, foto privada y vigencia efímera máx. 6 horas
+            self.is_anonymous_public = True
+            self.hide_media_public = True
+            base_time = self.created_at or timezone.now()
+            max_expiry = base_time + timedelta(hours=self.CITIZEN_TTL_HOURS)
+            if self.expires_at is None or self.expires_at > max_expiry:
+                self.expires_at = max_expiry
+
+        super().save(*args, **kwargs)
+
+    def is_expired(self, now=None) -> bool:
+        if not self.expires_at:
+            return False
+        ref = now or timezone.now()
+        return self.expires_at <= ref
+
     def __str__(self):
         return f"{self.title} - {self.get_status_display()} ({self.district})"
 
     class Meta:
-        verbose_name = "Alerta Ambiental"
-        verbose_name_plural = "Alertas Ambientales"
+        verbose_name = "Alerta"
+        verbose_name_plural = "Alertas"
 
 
 class WastePoint(models.Model):
@@ -153,6 +195,7 @@ class SystemConfig(models.Model):
 # ---------------------------------------------------------------------------
 
 COLLECTOR_GROUP_NAME = 'recolectores'
+SERENAZGO_GROUP_NAME = 'serenazgo'
 
 
 def is_collector(user) -> bool:
@@ -160,6 +203,33 @@ def is_collector(user) -> bool:
     if not user or not user.is_authenticated:
         return False
     return user.groups.filter(name=COLLECTOR_GROUP_NAME).exists()
+
+
+def is_serenazgo(user) -> bool:
+    """True si el usuario pertenece al grupo de Serenazgo / Seguridad Ciudadana."""
+    if not user or not user.is_authenticated:
+        return False
+    return user.groups.filter(name=SERENAZGO_GROUP_NAME).exists()
+
+
+def can_manage_domain(user, domain: str) -> bool:
+    """Determina si un usuario tiene permisos de gestión sobre un dominio de alerta."""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    if domain == 'ciudadana':
+        return is_serenazgo(user)
+    return bool(user.is_staff)
+
+
+def can_view_private_evidence(user, alert: 'Alert') -> bool:
+    """Solo Serenazgo, superadmin o el propio denunciante pueden ver evidencia privada ciudadana."""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser or is_serenazgo(user):
+        return True
+    return bool(alert.reported_by_id and alert.reported_by_id == user.id)
 
 
 class Truck(models.Model):

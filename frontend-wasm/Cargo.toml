@@ -29,6 +29,9 @@ web-sys = { version = "0.3", features = [
     "Document",
     "Storage",
     "Location",
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
     "console"
 ] }
 gloo-net = "0.5"

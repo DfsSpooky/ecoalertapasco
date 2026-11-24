@@ -2,10 +2,11 @@ use leptos::*;
 use wasm_bindgen::prelude::*;
 use crate::components::alerts_carousel::AlertsCarousel;
 use crate::geo::get_browser_gps_position;
-use crate::models::{AuthUser, CollectionRoute, EcoAlert, TruckRun, WastePoint};
+use crate::models::{AlertDomain, AuthUser, CollectionRoute, EcoAlert, TruckRun, WastePoint};
 
 #[component]
 pub fn MapView(
+    active_domain: RwSignal<AlertDomain>,
     filtered_alerts: Memo<Vec<EcoAlert>>,
     selected_alert_id: RwSignal<Option<String>>,
     is_report_mode: RwSignal<bool>,
@@ -73,16 +74,20 @@ pub fn MapView(
 
     create_effect(move |_| {
         let points = waste_points.get();
-        let visible = show_waste_layer.get();
+        let visible = show_waste_layer.get() && active_domain.get() == AlertDomain::Ambiental;
         if let Ok(json_str) = serde_json::to_string(&points) {
             let script = format!("window.ecoMap.renderWastePoints({}, {});", json_str, visible);
             let _ = js_sys::eval(&script);
         }
     });
 
-    // Camiones recolectores en recorrido (posición GPS en vivo vía WebSocket)
+    // Camiones recolectores en recorrido (posición GPS en vivo vía WebSocket; ocultos en mapa de seguridad)
     create_effect(move |_| {
-        let runs = truck_runs.get();
+        let runs = if active_domain.get() == AlertDomain::Ambiental {
+            truck_runs.get()
+        } else {
+            Vec::new()
+        };
         if let Ok(json_str) = serde_json::to_string(&runs) {
             let _ = js_sys::eval(&format!("window.ecoMap.renderTrucks({});", json_str));
         }
@@ -91,6 +96,9 @@ pub fn MapView(
     // Refrescar cada 15 s el estado "hace N s / sin señal" de los camiones aunque no lleguen posiciones
     {
         let tick = Closure::<dyn FnMut()>::new(move || {
+            if active_domain.get_untracked() != AlertDomain::Ambiental {
+                return;
+            }
             let runs = truck_runs.get_untracked();
             if runs.is_empty() {
                 return;
@@ -105,10 +113,10 @@ pub fn MapView(
         tick.forget();
     }
 
-    // Rutas de recolección publicadas por la autoridad (en vivo vía WebSocket)
+    // Rutas de recolección publicadas por la autoridad (en vivo vía WebSocket; ocultas en mapa de seguridad)
     create_effect(move |_| {
         let routes = collection_routes.get();
-        let visible = show_waste_layer.get();
+        let visible = show_waste_layer.get() && active_domain.get() == AlertDomain::Ambiental;
         if let Ok(json_str) = serde_json::to_string(&routes) {
             let script = format!("window.ecoMap.renderCollectionRoutes({}, {});", json_str, visible);
             let _ = js_sys::eval(&script);
@@ -126,7 +134,7 @@ pub fn MapView(
 
     create_effect(move |_| {
         let points = waste_points.get();
-        let is_opt = show_optimized_route.get();
+        let is_opt = show_optimized_route.get() && active_domain.get() == AlertDomain::Ambiental;
         if let Ok(json_str) = serde_json::to_string(&points) {
             let script = format!("window.ecoMap.renderOptimizedRoute({}, {});", json_str, is_opt);
             let _ = js_sys::eval(&script);
@@ -181,39 +189,88 @@ pub fn MapView(
             // Full bleed map container
             <div id="map-container" class="w-full h-full z-0"></div>
 
-            // Mobile Hamburger Menu Button (opens sidebar drawer on mobile)
-            <div class="absolute top-2.5 left-2.5 z-10 md:hidden">
+            // Mobile Top Bar: Menú + Switch etiquetado de Mapa Apartado (siempre visible sin recortes)
+            <div class="absolute top-2.5 left-2.5 right-2.5 z-10 flex items-center justify-between gap-2 md:hidden">
                 <button
-                    class="bg-white/95 backdrop-blur-md p-2 rounded-xl shadow-[0_2px_8px_rgba(60,64,67,0.15)] border border-slate-200/90 text-slate-800 hover:text-emerald-700 active:scale-95 transition flex items-center justify-center cursor-pointer"
+                    class="bg-white/95 backdrop-blur-md p-2.5 rounded-xl shadow-[0_2px_8px_rgba(60,64,67,0.15)] border border-slate-200/90 text-slate-800 hover:text-emerald-700 active:scale-95 transition flex items-center justify-center shrink-0 cursor-pointer"
                     on:click=move |_| is_sidebar_collapsed.set(false)
                     title="Abrir menú y filtros"
                 >
                     <i class="fa-solid fa-bars text-xs"></i>
                 </button>
+
+                <div class="bg-white/95 backdrop-blur-md rounded-xl shadow-[0_2px_8px_rgba(60,64,67,0.16)] border border-slate-200/90 px-2 py-1 flex items-center gap-1 min-w-0">
+                    <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 pl-0.5 shrink-0">"Mapa:"</span>
+                    <button
+                        class=move || {
+                            if active_domain.get() == AlertDomain::Ambiental {
+                                "px-2 py-1 rounded-lg text-[11px] font-bold bg-emerald-600 text-white shadow-2xs transition cursor-pointer flex items-center space-x-1 shrink-0"
+                            } else {
+                                "px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer flex items-center space-x-1 shrink-0"
+                            }
+                        }
+                        on:click=move |_| active_domain.set(AlertDomain::Ambiental)
+                    >
+                        <span>"🌱"</span>
+                        <span>"Ambiental"</span>
+                    </button>
+                    <button
+                        class=move || {
+                            if active_domain.get() == AlertDomain::Ciudadana {
+                                "px-2 py-1 rounded-lg text-[11px] font-bold bg-indigo-600 text-white shadow-2xs transition cursor-pointer flex items-center space-x-1 shrink-0"
+                            } else {
+                                "px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer flex items-center space-x-1 shrink-0"
+                            }
+                        }
+                        on:click=move |_| active_domain.set(AlertDomain::Ciudadana)
+                    >
+                        <span>"🛡️"</span>
+                        <span>"Seguridad"</span>
+                    </button>
+                </div>
             </div>
 
-            // Google Maps Style Floating Island: Layer Switcher, Waste Points, & GPS
-            <div class="absolute top-2.5 left-12 right-2.5 md:left-auto md:right-3.5 z-10 flex items-center justify-start md:justify-end gap-1.5 overflow-x-auto md:overflow-visible no-scrollbar py-0.5 scroll-smooth touch-pan-x">
-                // Toggle Waste & Trucks Layer Button
-                <button
-                    class=move || {
-                        if show_waste_layer.get() {
-                            "shrink-0 whitespace-nowrap bg-emerald-600 hover:bg-emerald-700 text-white shadow-[0_2px_8px_rgba(16,185,129,0.3)] border border-emerald-500/80 px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer"
-                        } else {
-                            "shrink-0 whitespace-nowrap bg-white/95 hover:bg-white text-slate-700 hover:text-slate-900 shadow-[0_2px_8px_rgba(60,64,67,0.12)] border border-slate-200/90 px-3 py-1.5 rounded-full text-xs font-medium flex items-center space-x-1.5 transition cursor-pointer"
+            // Floating Map Tools Island (Fila 2 en móvil, Fila 1 con scroll seguro en desktop para no taparse detrás del sidebar)
+            <div class=move || {
+                if is_sidebar_collapsed.get() {
+                    "absolute top-14 left-2.5 right-2.5 md:top-3 md:left-[410px] md:right-3.5 z-10 flex items-center justify-start md:justify-end gap-1.5 overflow-x-auto no-scrollbar py-0.5 scroll-smooth touch-pan-x"
+                } else {
+                    "absolute top-14 left-2.5 right-2.5 md:top-2.5 md:left-3.5 md:right-3.5 z-10 flex items-center justify-start md:justify-end gap-1.5 overflow-x-auto no-scrollbar py-0.5 scroll-smooth touch-pan-x"
+                }
+            }>
+
+                {move || (active_domain.get() == AlertDomain::Ciudadana).then(|| view! {
+                    <span
+                        class="shrink-0 whitespace-nowrap bg-indigo-50/95 text-indigo-900 border border-indigo-200/90 px-3 py-1.5 rounded-full text-[11px] font-semibold flex items-center space-x-1.5 shadow-2xs"
+                        title="Esta vista es preventiva e informativa; ante peligro inmediato llama al 105 (PNP) o Serenazgo."
+                    >
+                        <span>"📞"</span>
+                        <span>"Emergencias: 105 / Serenazgo"</span>
+                    </span>
+                })}
+
+                // Toggle Waste & Trucks Layer Button (Solo en Mapa Ambiental)
+                {move || (active_domain.get() == AlertDomain::Ambiental).then(|| view! {
+                    <button
+                        class=move || {
+                            if show_waste_layer.get() {
+                                "shrink-0 whitespace-nowrap bg-emerald-600 hover:bg-emerald-700 text-white shadow-[0_2px_8px_rgba(16,185,129,0.3)] border border-emerald-500/80 px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer"
+                            } else {
+                                "shrink-0 whitespace-nowrap bg-white/95 hover:bg-white text-slate-700 hover:text-slate-900 shadow-[0_2px_8px_rgba(60,64,67,0.12)] border border-slate-200/90 px-3 py-1.5 rounded-full text-xs font-medium flex items-center space-x-1.5 transition cursor-pointer"
+                            }
                         }
-                    }
-                    title="Mostrar botaderos autorizados, puntos de acopio y ruta del camión recolector"
-                    on:click=move |_| show_waste_layer.update(|v| *v = !*v)
-                >
-                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/>
-                        <path d="M11 19h8.2a1.8 1.8 0 0 0 1.573-.896 1.79 1.79 0 0 0 0-1.792L16.8 9.5"/>
-                        <path d="m15.5 13-3.5 6-3.5-6"/>
-                        <path d="m2 9 3-5 3 5"/>
-                    </svg>
-                    <span>"♻️ Acopio"</span>
-                </button>
+                        title="Mostrar botaderos autorizados, puntos de acopio y ruta del camión recolector"
+                        on:click=move |_| show_waste_layer.update(|v| *v = !*v)
+                    >
+                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/>
+                            <path d="M11 19h8.2a1.8 1.8 0 0 0 1.573-.896 1.79 1.79 0 0 0 0-1.792L16.8 9.5"/>
+                            <path d="m15.5 13-3.5 6-3.5-6"/>
+                            <path d="m2 9 3-5 3 5"/>
+                        </svg>
+                        <span>"♻️ Acopio"</span>
+                    </button>
+                })}
 
                 // Toggle Heatmap Button
                 <button
@@ -231,48 +288,54 @@ pub fn MapView(
                     <span>"Calor"</span>
                 </button>
 
-                // Toggle Optimized Collection Route
-                <button
-                    class=move || {
-                        if show_optimized_route.get() {
-                            "shrink-0 whitespace-nowrap bg-teal-600 hover:bg-teal-700 text-white shadow-[0_2px_8px_rgba(13,148,136,0.3)] border border-teal-500/80 px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer"
-                        } else {
-                            "shrink-0 whitespace-nowrap bg-white/95 hover:bg-white text-slate-700 hover:text-slate-900 shadow-[0_2px_8px_rgba(60,64,67,0.12)] border border-slate-200/90 px-3 py-1.5 rounded-full text-xs font-medium flex items-center space-x-1.5 transition cursor-pointer"
+                // Toggle Optimized Collection Route (Solo en Mapa Ambiental)
+                {move || (active_domain.get() == AlertDomain::Ambiental).then(|| view! {
+                    <button
+                        class=move || {
+                            if show_optimized_route.get() {
+                                "shrink-0 whitespace-nowrap bg-teal-600 hover:bg-teal-700 text-white shadow-[0_2px_8px_rgba(13,148,136,0.3)] border border-teal-500/80 px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer"
+                            } else {
+                                "shrink-0 whitespace-nowrap bg-white/95 hover:bg-white text-slate-700 hover:text-slate-900 shadow-[0_2px_8px_rgba(60,64,67,0.12)] border border-slate-200/90 px-3 py-1.5 rounded-full text-xs font-medium flex items-center space-x-1.5 transition cursor-pointer"
+                            }
                         }
-                    }
-                    title="Calcular y trazar la ruta de recolección prioritaria para contenedores llenos y medios"
-                    on:click=move |_| show_optimized_route.update(|v| *v = !*v)
-                >
-                    <span>"🚛"</span>
-                    <span>"Ruta Óptima"</span>
-                </button>
+                        title="Calcular y trazar la ruta de recolección prioritaria para contenedores llenos y medios"
+                        on:click=move |_| show_optimized_route.update(|v| *v = !*v)
+                    >
+                        <span>"🚛"</span>
+                        <span>"Ruta Óptima"</span>
+                    </button>
+                })}
 
-                // Nearest Waste Points List Button
-                <button
-                    class="shrink-0 whitespace-nowrap bg-white/95 hover:bg-white text-slate-700 hover:text-slate-900 shadow-[0_2px_8px_rgba(60,64,67,0.12)] border border-slate-200/90 px-3 py-1.5 rounded-full text-xs font-medium flex items-center space-x-1.5 transition cursor-pointer"
-                    title="Listar puntos de acopio cercanos ordenados por proximidad"
-                    on:click=move |_| show_waste_list_modal.set(true)
-                >
-                    <svg class="w-3.5 h-3.5 text-slate-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="8" y1="6" x2="21" y2="6"></line>
-                        <line x1="8" y1="12" x2="21" y2="12"></line>
-                        <line x1="8" y1="18" x2="21" y2="18"></line>
-                        <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                        <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                        <line x1="3" y1="18" x2="3.01" y2="18"></line>
-                    </svg>
-                    <span>"Puntos Cercanos"</span>
-                </button>
+                // Nearest Waste Points List Button (Solo en Mapa Ambiental)
+                {move || (active_domain.get() == AlertDomain::Ambiental).then(|| view! {
+                    <button
+                        class="shrink-0 whitespace-nowrap bg-white/95 hover:bg-white text-slate-700 hover:text-slate-900 shadow-[0_2px_8px_rgba(60,64,67,0.12)] border border-slate-200/90 px-3 py-1.5 rounded-full text-xs font-medium flex items-center space-x-1.5 transition cursor-pointer"
+                        title="Listar puntos de acopio cercanos ordenados por proximidad"
+                        on:click=move |_| show_waste_list_modal.set(true)
+                    >
+                        <svg class="w-3.5 h-3.5 text-slate-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="8" y1="6" x2="21" y2="6"></line>
+                            <line x1="8" y1="12" x2="21" y2="12"></line>
+                            <line x1="8" y1="18" x2="21" y2="18"></line>
+                            <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                            <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                            <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                        </svg>
+                        <span>"Puntos Cercanos"</span>
+                    </button>
+                })}
 
-                // Transparency Portal Quick Button
-                <button
-                    class="shrink-0 whitespace-nowrap bg-white/95 hover:bg-white text-emerald-800 hover:text-emerald-900 shadow-[0_2px_8px_rgba(60,64,67,0.12)] border border-emerald-200/80 px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer"
-                    title="Ver Portal de Transparencia Ciudadana y Casos Resueltos"
-                    on:click=move |_| show_transparency_portal.set(true)
-                >
-                    <span>"🏆"</span>
-                    <span>"Transparencia"</span>
-                </button>
+                // Transparency Portal Quick Button (Solo en Mapa Ambiental)
+                {move || (active_domain.get() == AlertDomain::Ambiental).then(|| view! {
+                    <button
+                        class="shrink-0 whitespace-nowrap bg-white/95 hover:bg-white text-emerald-800 hover:text-emerald-900 shadow-[0_2px_8px_rgba(60,64,67,0.12)] border border-emerald-200/80 px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer"
+                        title="Ver Portal de Transparencia Ciudadana y Casos Resueltos"
+                        on:click=move |_| show_transparency_portal.set(true)
+                    >
+                        <span>"🏆"</span>
+                        <span>"Transparencia"</span>
+                    </button>
+                })}
 
                 // Modo Recolector (solo conductores de camión)
                 {move || {

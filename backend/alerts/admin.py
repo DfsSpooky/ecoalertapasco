@@ -8,13 +8,16 @@ admin.site.index_title = "Centro de Gestión y Fiscalización Ambiental de Cerro
 
 @admin.register(Alert)
 class AlertAdmin(admin.ModelAdmin):
-    list_display = ('title', 'category', 'severity', 'district', 'status', 'confirmations_count', 'created_at', 'resolved_at')
-    list_filter = ('status', 'category', 'severity', 'district')
+    list_display = ('title', 'domain', 'category', 'severity', 'district', 'status', 'expires_at', 'confirmations_count', 'created_at', 'resolved_at')
+    list_filter = ('domain', 'status', 'category', 'severity', 'district')
     search_fields = ('title', 'description', 'address')
     readonly_fields = ('created_at', 'confirmations_count')
     fieldsets = (
         ('Detalles del Reporte', {
-            'fields': ('title', 'description', 'category', 'severity', 'district', 'address', 'image_url', 'image_url_2', 'confirmations_count')
+            'fields': ('domain', 'title', 'description', 'category', 'severity', 'district', 'address', 'image_url', 'image_url_2', 'confirmations_count')
+        }),
+        ('Privacidad y Vigencia', {
+            'fields': ('is_anonymous_public', 'hide_media_public', 'expires_at')
         }),
         ('Ubicación Geográfica', {
             'fields': ('latitude', 'longitude')

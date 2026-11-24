@@ -1,6 +1,6 @@
 use leptos::*;
 use crate::api::export_csv_url;
-use crate::models::{EcoAlert, EcoCategory, EcoDistrict};
+use crate::models::{AlertDomain, EcoAlert, EcoCategory, EcoDistrict};
 
 #[component]
 pub fn TransparencyPortal(
@@ -17,7 +17,7 @@ pub fn TransparencyPortal(
         alerts
             .get()
             .into_iter()
-            .filter(|a| a.status == "solved")
+            .filter(|a| a.status == "solved" && a.category.domain() == AlertDomain::Ambiental)
             .collect::<Vec<EcoAlert>>()
     });
 
@@ -40,6 +40,7 @@ pub fn TransparencyPortal(
                 EcoCategory::Basura => "Residuos Sólidos 🗑️".to_string(),
                 EcoCategory::Agua => "Recursos Hídricos 💧".to_string(),
                 EcoCategory::Aire => "Calidad del Aire 🌬️".to_string(),
+                _ => format!("{} {}", cat.display_name(), cat.icon()),
             })
             .unwrap_or_else(|| "General".to_string())
     };
@@ -264,7 +265,7 @@ pub fn TransparencyPortal(
                                     >
                                         "Todas"
                                     </button>
-                                    {EcoCategory::all().iter().map(|&cat| {
+                                    {EcoCategory::environmental_all().iter().map(|&cat| {
                                         let is_sel = move || selected_category.get() == Some(cat);
                                         view! {
                                             <button
