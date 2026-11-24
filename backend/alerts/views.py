@@ -839,12 +839,17 @@ class LoginView(APIView):
     throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
-        username = request.data.get('username')
-        password = request.data.get('password')
+        username = str(request.data.get('username') or '').strip()
+        password = str(request.data.get('password') or '')
         if not username or not password:
             return Response({'error': 'Por favor ingresa usuario y contraseña'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         user = authenticate(username=username, password=password)
+        if not user and '@' in username:
+            matched = User.objects.filter(email__iexact=username).first()
+            if matched:
+                user = authenticate(username=matched.username, password=password)
+
         if user:
             token, _ = Token.objects.get_or_create(user=user)
             return Response({
@@ -962,11 +967,14 @@ class RegisterView(APIView):
             return Response({'error': err_msg}, status=status.HTTP_400_BAD_REQUEST)
 
         username = str(request.data.get('username') or '').strip()
-        email = str(request.data.get('email') or '').strip()
+        email = str(request.data.get('email') or '').strip().lower()
         password = str(request.data.get('password') or '')
 
         if not username or not email or not password:
             return Response({'error': 'Por favor completa todos los campos obligatorios.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(password) < 8:
+            return Response({'error': 'La contraseña debe tener al menos 8 caracteres.'}, status=status.HTTP_400_BAD_REQUEST)
 
         if User.objects.filter(username__iexact=username).exists():
             return Response({'error': 'El nombre de usuario ya está registrado.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -988,7 +996,10 @@ class RegisterView(APIView):
                 'token': token.key,
                 'username': user.username,
                 'email': user.email,
-                'is_staff': False
+                'is_staff': False,
+                'is_superuser': False,
+                'is_collector': False,
+                'is_serenazgo': False,
             }, status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1002,6 +1013,7 @@ class GoogleAuthView(APIView):
     """
     authentication_classes = []
     permission_classes = []
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         credential = (request.data.get('credential') or request.data.get('id_token') or '').strip()
@@ -1090,6 +1102,12 @@ class GoogleAuthView(APIView):
             user.set_unusable_password()
             user.save()
         else:
+            # Blindaje: cuentas oficiales (autoridad/serenazgo/recolectores) deben usar login institucional con contraseña
+            if user.is_staff or user.is_superuser or is_serenazgo(user) or is_collector(user):
+                return Response({
+                    'error': 'Las cuentas oficiales (Autoridades, Serenazgo o Conductores) deben iniciar sesión en la pestaña Autoridades con su usuario y contraseña.'
+                }, status=status.HTTP_403_FORBIDDEN)
+
             # Actualizar nombres si no los tenía
             if full_name and not user.first_name and not user.last_name:
                 parts = full_name.split()

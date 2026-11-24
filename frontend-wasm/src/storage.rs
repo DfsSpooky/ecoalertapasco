@@ -160,6 +160,12 @@ pub fn clear_auth_session() {
 pub fn logout_and_clear_session(current_user: leptos::RwSignal<Option<AuthUser>>) {
     if let Some(user) = current_user.get() {
         let tok = user.token.clone();
+        // Conservar perfil recordado para el selector visual, pero sin token revocado
+        if user.email.is_some() || user.photo_url.is_some() || !user.is_authority() {
+            let mut remembered = user.clone();
+            remembered.token = String::new();
+            save_remembered_google_user(&remembered);
+        }
         leptos::spawn_local(async move {
             let _ = gloo_net::http::Request::post(&crate::api::logout_url())
                 .header("Authorization", &format!("Token {}", tok))
@@ -167,6 +173,7 @@ pub fn logout_and_clear_session(current_user: leptos::RwSignal<Option<AuthUser>>
                 .await;
         });
     }
+    let _ = js_sys::eval("if (window.ecoGoogleAuth) window.ecoGoogleAuth.disableAutoSelect();");
     clear_auth_session();
     current_user.set(None);
 }

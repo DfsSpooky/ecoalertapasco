@@ -401,7 +401,6 @@ pub struct LoginPayload<'a> {
     pub password: &'a str,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterPayload<'a> {
     pub username: &'a str,

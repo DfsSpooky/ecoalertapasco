@@ -380,7 +380,7 @@
                     }));
                   }
                 },
-                auto_select: true,
+                auto_select: false,
                 cancel_on_tap_outside: true,
                 use_fedcm_for_prompt: true
               });
@@ -393,10 +393,22 @@
         }
         tryInit();
       },
+      isInAppBrowser: function() {
+        const ua = navigator.userAgent || navigator.vendor || '';
+        return /FBAN|FBAV|Instagram|WhatsApp|Line\/|MicroMessenger|wv\)/i.test(ua);
+      },
+      disableAutoSelect: function() {
+        if (window.google && window.google.accounts && window.google.accounts.id) {
+          try {
+            window.google.accounts.id.disableAutoSelect();
+          } catch (e) {
+            console.warn("GIS disableAutoSelect error:", e);
+          }
+        }
+      },
       renderButton: function(containerId) {
         const container = document.getElementById(containerId);
         if (!container) return;
-        if (container.querySelector('iframe')) return;
         const self = this;
         function tryRender() {
           if (window.google && window.google.accounts && window.google.accounts.id && self.clientId) {
@@ -409,6 +421,7 @@
                 shape: 'pill',
                 text: 'continue_with',
                 logo_alignment: 'left',
+                locale: 'es',
                 width: Math.min(360, Math.max(280, container.offsetWidth || 300))
               });
             } catch(e) {

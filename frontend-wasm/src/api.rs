@@ -116,7 +116,6 @@ pub fn logout_url() -> String {
     format!("{}/api/auth/logout/", api_base_url())
 }
 
-#[allow(dead_code)]
 pub fn register_url() -> String {
     format!("{}/api/auth/register/", api_base_url())
 }

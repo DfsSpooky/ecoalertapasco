@@ -866,3 +866,130 @@ class CitizenSecurityAlertsTests(TestCase):
         csv_text = csv_res.content.decode('utf-8')
         self.assertIn('Vecino Anónimo', csv_text)
         self.assertNotIn('vecino_real', csv_text)
+
+
+class AuthImprovementsTests(TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+        from django.contrib.auth.models import Group
+        from alerts.models import SystemConfig
+
+        cache.clear()
+        self.client = APIClient()
+        SystemConfig.objects.update_or_create(
+            key='GOOGLE_CLIENT_ID',
+            defaults={'value': 'test-client-id.apps.googleusercontent.com'},
+        )
+        self.citizen = User.objects.create_user(
+            username='vecino_login',
+            email='vecino.login@example.com',
+            password='PasswordSegura123!',
+        )
+        self.staff_user = User.objects.create_user(
+            username='admin_oficial',
+            email='admin.oficial@pasco.gob.pe',
+            password='PasswordOficial123!',
+            is_staff=True,
+        )
+        serenazgo_group, _ = Group.objects.get_or_create(name='serenazgo')
+        self.serenazgo_user = User.objects.create_user(
+            username='sereno_oficial',
+            email='sereno.oficial@pasco.gob.pe',
+            password='PasswordOficial123!',
+        )
+        self.serenazgo_user.groups.add(serenazgo_group)
+
+        collector_group, _ = Group.objects.get_or_create(name='recolectores')
+        self.collector_user = User.objects.create_user(
+            username='chofer_oficial',
+            email='chofer.oficial@pasco.gob.pe',
+            password='PasswordOficial123!',
+        )
+        self.collector_user.groups.add(collector_group)
+
+    def tearDown(self):
+        from django.core.cache import cache
+        cache.clear()
+
+    def test_login_accepts_email_or_username(self):
+        resp_email = self.client.post('/api/auth/login/', {
+            'username': 'VECINO.LOGIN@example.com',
+            'password': 'PasswordSegura123!',
+        }, format='json')
+        self.assertEqual(resp_email.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_email.data['username'], 'vecino_login')
+        self.assertIn('token', resp_email.data)
+
+        resp_user = self.client.post('/api/auth/login/', {
+            'username': 'vecino_login',
+            'password': 'PasswordSegura123!',
+        }, format='json')
+        self.assertEqual(resp_user.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_user.data['email'], 'vecino.login@example.com')
+
+    def test_register_enforces_min_password_and_returns_role_flags(self):
+        short_resp = self.client.post('/api/auth/register/', {
+            'username': 'clave_corta',
+            'email': 'Corta@Example.com',
+            'password': '1234567',
+            'turnstile_token': 'dummy_test_token',
+        }, format='json')
+        self.assertEqual(short_resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+        ok_resp = self.client.post('/api/auth/register/', {
+            'username': 'nuevo_pasco',
+            'email': 'Nuevo.Pasco@Example.com',
+            'password': 'ClaveLarga123!',
+            'turnstile_token': 'dummy_test_token',
+        }, format='json')
+        self.assertEqual(ok_resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(ok_resp.data['email'], 'nuevo.pasco@example.com')
+        self.assertFalse(ok_resp.data['is_staff'])
+        self.assertFalse(ok_resp.data['is_superuser'])
+        self.assertFalse(ok_resp.data['is_collector'])
+        self.assertFalse(ok_resp.data['is_serenazgo'])
+
+    def test_google_auth_logs_in_citizen_and_blocks_official_accounts(self):
+        import json
+        from unittest.mock import patch, MagicMock
+
+        def make_mock_response(payload):
+            mock_resp = MagicMock()
+            mock_resp.status = 200
+            mock_resp.read.return_value = json.dumps(payload).encode('utf-8')
+            mock_cm = MagicMock()
+            mock_cm.__enter__.return_value = mock_resp
+            mock_cm.__exit__.return_value = False
+            return mock_cm
+
+        citizen_payload = {
+            'iss': 'https://accounts.google.com',
+            'aud': 'test-client-id.apps.googleusercontent.com',
+            'email_verified': 'true',
+            'email': 'ciudadano.google@gmail.com',
+            'name': 'Vecino Google',
+            'picture': 'https://example.com/avatar.png',
+            'sub': 'google-sub-123',
+        }
+        with patch('urllib.request.urlopen', return_value=make_mock_response(citizen_payload)):
+            resp = self.client.post('/api/auth/google/', {'credential': 'fake-jwt-citizen'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn('token', resp.data)
+        self.assertEqual(resp.data['email'], 'ciudadano.google@gmail.com')
+        self.assertFalse(resp.data['is_staff'])
+        self.assertFalse(resp.data['is_serenazgo'])
+
+        for official_email in (
+            'admin.oficial@pasco.gob.pe',
+            'sereno.oficial@pasco.gob.pe',
+            'chofer.oficial@pasco.gob.pe',
+        ):
+            payload = {
+                **citizen_payload,
+                'email': official_email,
+                'name': 'Oficial',
+            }
+            with patch('urllib.request.urlopen', return_value=make_mock_response(payload)):
+                blocked = self.client.post('/api/auth/google/', {'credential': 'fake-jwt-official'}, format='json')
+            self.assertEqual(blocked.status_code, status.HTTP_403_FORBIDDEN, f"Expected 403 for {official_email}")
+
