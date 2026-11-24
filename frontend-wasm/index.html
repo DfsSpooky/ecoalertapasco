@@ -1346,13 +1346,11 @@
 
         let stream;
         try {
-          const isPortrait = window.innerHeight > window.innerWidth;
           stream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: { ideal: this._facingMode },
-              width: { ideal: isPortrait ? 1200 : 1600 },
-              height: { ideal: isPortrait ? 1600 : 1200 },
-              aspectRatio: { ideal: isPortrait ? 0.75 : 1.3333 }
+              width: { ideal: 1600 },
+              height: { ideal: 1200 }
             },
             audio: false
           });
@@ -1365,6 +1363,18 @@
             throw new Error("No se detectó cámara disponible en este dispositivo.");
           }
           throw new Error((err && err.message) || "No se pudo abrir la cámara en vivo.");
+        }
+
+        // Restablecer zoom óptico/digital a 1x (evita que ciertos móviles inicien con zoom o recorte)
+        const track = stream.getVideoTracks()[0];
+        if (track && typeof track.getCapabilities === "function" && typeof track.applyConstraints === "function") {
+          try {
+            const caps = track.getCapabilities();
+            if (caps && caps.zoom && typeof caps.zoom.min === "number" && typeof caps.zoom.max === "number") {
+              const targetZoom = Math.max(caps.zoom.min, Math.min(1, caps.zoom.max));
+              await track.applyConstraints({ advanced: [{ zoom: targetZoom }] });
+            }
+          } catch (e) {}
         }
 
         this._stream = stream;

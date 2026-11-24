@@ -718,49 +718,48 @@ pub fn ReportDialog(
                             aria-labelledby="live-camera-title"
                             class="fixed inset-0 m-0 w-screen h-[100dvh] max-w-none max-h-none rounded-none sm:m-auto sm:w-full sm:max-w-[440px] sm:h-[88dvh] sm:max-h-[760px] sm:rounded-[28px] bg-[#111214] text-[#E3E3E3] p-0 border-0 sm:border sm:border-white/10 shadow-2xl overflow-hidden open:flex open:flex-col"
                         >
-                            // Viewfinder edge-to-edge a pantalla completa
-                            <div class="relative flex-1 min-h-0 w-full bg-black overflow-hidden">
+                            // Top Google Camera bar (separada del encuadre para no tapar ni recortar la imagen)
+                            <div class="shrink-0 bg-[#111214] px-4 py-3 flex items-center justify-between border-b border-white/10">
+                                <div class="inline-flex items-center space-x-2 px-3 py-1.5 rounded-full bg-[#1E1F20] border border-white/10 min-w-0">
+                                    <svg class="w-4 h-4 text-[#8AB4F8] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+                                        <circle cx="12" cy="13" r="3.5"/>
+                                    </svg>
+                                    <h1 id="live-camera-title" class="text-[13px] font-medium tracking-tight text-white truncate">
+                                        "Cámara en Vivo"
+                                    </h1>
+                                </div>
+                                <button
+                                    type="button"
+                                    aria-label="Cerrar cámara en vivo"
+                                    class="w-9 h-9 rounded-full bg-[#282A2C] hover:bg-[#35373A] text-white flex items-center justify-center transition cursor-pointer"
+                                    on:click=move |_| {
+                                        let _ = js_sys::eval("if (window.ecoCamera) window.ecoCamera.close('live-camera-dialog');");
+                                    }
+                                >
+                                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M18 6 6 18"/>
+                                        <path d="m6 6 12 12"/>
+                                    </svg>
+                                </button>
+                            </div>
+
+                            // Viewfinder sin zoom ni recorte (object-contain muestra el 100% del sensor)
+                            <div class="relative flex-1 min-h-0 w-full bg-black flex items-center justify-center overflow-hidden">
                                 <video
                                     id="live-camera-video"
                                     autoplay
                                     playsinline
                                     muted
-                                    class="absolute inset-0 w-full h-full object-cover"
+                                    class="w-full h-full object-contain"
                                 ></video>
 
-                                // Top translucent Google Camera header overlaid on viewfinder
-                                <div class="absolute top-0 inset-x-0 z-10 px-4 pt-4 pb-8 bg-gradient-to-b from-black/75 via-black/35 to-transparent flex items-center justify-between">
-                                    <div class="inline-flex items-center space-x-2 px-3 py-1.5 rounded-full bg-black/50 backdrop-blur-md border border-white/15 min-w-0">
-                                        // Google Lens / Camera style static SVG icon (no blinking dot)
-                                        <svg class="w-4 h-4 text-[#8AB4F8] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
-                                            <circle cx="12" cy="13" r="3.5"/>
-                                        </svg>
-                                        <h1 id="live-camera-title" class="text-[13px] font-medium tracking-tight text-white truncate">
-                                            "Cámara en Vivo"
-                                        </h1>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        aria-label="Cerrar cámara en vivo"
-                                        class="w-10 h-10 rounded-full bg-black/50 hover:bg-white/20 backdrop-blur-md border border-white/15 text-white flex items-center justify-center transition cursor-pointer"
-                                        on:click=move |_| {
-                                            let _ = js_sys::eval("if (window.ecoCamera) window.ecoCamera.close('live-camera-dialog');");
-                                        }
-                                    >
-                                        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <path d="M18 6 6 18"/>
-                                            <path d="m6 6 12 12"/>
-                                        </svg>
-                                    </button>
-                                </div>
-
                                 // Google Lens style subtle corner framing brackets
-                                <div class="pointer-events-none absolute inset-6 sm:inset-7">
-                                    <div class="absolute top-0 left-0 w-7 h-7 border-t-2 border-l-2 border-white/70 rounded-tl-xl"></div>
-                                    <div class="absolute top-0 right-0 w-7 h-7 border-t-2 border-r-2 border-white/70 rounded-tr-xl"></div>
-                                    <div class="absolute bottom-0 left-0 w-7 h-7 border-b-2 border-l-2 border-white/70 rounded-bl-xl"></div>
-                                    <div class="absolute bottom-0 right-0 w-7 h-7 border-b-2 border-r-2 border-white/70 rounded-br-xl"></div>
+                                <div class="pointer-events-none absolute inset-4 sm:inset-5">
+                                    <div class="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-white/55 rounded-tl-xl"></div>
+                                    <div class="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-white/55 rounded-tr-xl"></div>
+                                    <div class="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-white/55 rounded-bl-xl"></div>
+                                    <div class="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-white/55 rounded-br-xl"></div>
                                 </div>
                             </div>
 
