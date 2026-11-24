@@ -66,7 +66,14 @@ pub fn AuthorityDashboard(
     let filter_district = create_rw_signal(None::<EcoDistrict>);
     let filter_severity = create_rw_signal(None::<EcoSeverity>);
     let filter_urgent_sla = create_rw_signal(false);
-    let show_analytics = create_rw_signal(true);
+    let show_analytics = create_rw_signal({
+        web_sys::window()
+            .and_then(|w| w.inner_width().ok())
+            .and_then(|v| v.as_f64())
+            .map(|w| w >= 768.0)
+            .unwrap_or(true)
+    });
+    let show_mobile_extra_filters = create_rw_signal(false);
 
     // Waste filters & state
     let waste_search_query = create_rw_signal("".to_string());
@@ -1351,22 +1358,22 @@ pub fn AuthorityDashboard(
                 view! {
                     <div class="fixed inset-0 z-40 bg-slate-50 flex flex-col overflow-y-auto animate-in fade-in duration-200">
                         // Top Bar
-                        <header class="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200 px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4">
-                            <div class="flex items-center space-x-3">
-                                <div class="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0 shadow-xs">
-                                    <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <header class="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200 px-3 sm:px-8 py-2.5 sm:py-3.5 flex items-center justify-between gap-2 sm:gap-4">
+                            <div class="flex items-center space-x-2.5 sm:space-x-3 min-w-0">
+                                <div class="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0 shadow-xs">
+                                    <svg class="w-4 h-4 sm:w-5 sm:h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                                     </svg>
                                 </div>
-                                <div>
-                                    <h1 class="text-base sm:text-lg font-bold text-slate-900 leading-tight">
+                                <div class="min-w-0">
+                                    <h1 class="text-sm sm:text-lg font-bold text-slate-900 leading-tight truncate">
                                         {move || if dashboard_domain.get() == AlertDomain::Ciudadana {
-                                            "Centro de Control · Serenazgo Pasco"
+                                            "Serenazgo Pasco"
                                         } else {
-                                            "Panel de Control de Autoridades"
+                                            "Panel de Autoridades"
                                         }}
                                     </h1>
-                                    <p class="text-xs text-slate-500 font-medium">
+                                    <p class="hidden sm:block text-xs text-slate-500 font-medium truncate">
                                         {move || if dashboard_domain.get() == AlertDomain::Ciudadana {
                                             "Seguridad ciudadana, evidencias reservadas e incidencias efímeras · Cerro de Pasco"
                                         } else {
@@ -1376,7 +1383,7 @@ pub fn AuthorityDashboard(
                                 </div>
                             </div>
 
-                            <div class="flex items-center space-x-2 flex-wrap justify-end gap-y-1.5">
+                            <div class="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
                                 {move || current_user.get().map(|user| {
                                     let username = user.username.clone();
                                     let role = user.role_label();
@@ -1475,7 +1482,7 @@ pub fn AuthorityDashboard(
                                     </button>
 
                                     {move || show_notif_drawer.get().then(|| view! {
-                                        <div class="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl border border-slate-200 shadow-2xl z-50 overflow-hidden">
+                                        <div class="fixed inset-x-3 top-14 md:inset-x-auto md:top-auto md:absolute md:right-0 md:mt-2 md:w-96 bg-white rounded-2xl border border-slate-200 shadow-2xl z-50 overflow-hidden">
                                             <div class="px-4 py-3 bg-slate-900 text-white flex items-center justify-between">
                                                 <div>
                                                     <h4 class="text-xs font-bold">"Alertas Recientes en Vivo"</h4>
@@ -1582,18 +1589,37 @@ pub fn AuthorityDashboard(
                                 })}
 
                             <button
-                                class="px-4 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-xs transition flex items-center space-x-1.5"
+                                class="px-3 sm:px-4 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-xs transition flex items-center space-x-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                                 on:click=move |_| show_dashboard.set(false)
                             >
-                                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/>
                                     <line x1="9" y1="3" x2="9" y2="18"/>
                                     <line x1="15" y1="6" x2="15" y2="21"/>
                                 </svg>
-                                <span>"Volver al Mapa"</span>
+                                <span class="sm:hidden">"Mapa"</span>
+                                <span class="hidden sm:inline">"Volver al Mapa"</span>
                             </button>
                         </div>
                     </header>
+
+                    // Banner compacto móvil si el dispositivo aún no activó Push
+                    {move || (push_supported.get() && !push_subscribed.get() && push_permission.get() != "denied").then(|| view! {
+                        <div class="md:hidden mx-3 mt-2.5 px-3 py-2 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-between gap-2">
+                            <div class="min-w-0">
+                                <p class="text-[11px] font-bold text-indigo-900 truncate">"📲 Recibe alertas con pantalla bloqueada"</p>
+                                <p class="text-[10px] text-indigo-700 truncate">"Activa las notificaciones Push en este celular"</p>
+                            </div>
+                            <button
+                                type="button"
+                                disabled=move || push_busy.get()
+                                class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold shrink-0 cursor-pointer"
+                                on:click=toggle_push_subscription
+                            >
+                                {move || if push_busy.get() { "..." } else { "Activar" }}
+                            </button>
+                        </div>
+                    })}
 
                     {move || push_feedback.get().map(|(ok, msg)| view! {
                         <div class=if ok {
@@ -1699,7 +1725,7 @@ pub fn AuthorityDashboard(
                     </div>
 
                     // Main Container
-                    <main class="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 py-6 space-y-6">
+                    <main class="flex-1 max-w-6xl w-full mx-auto px-3 sm:px-8 py-3 sm:py-6 space-y-3 sm:space-y-6">
                         {move || if active_tab.get() == 2 {
                             view! {
                                 <FleetRoutesTab
@@ -1711,9 +1737,73 @@ pub fn AuthorityDashboard(
                             }.into_view()
                         } else if active_tab.get() == 0 {
                             view! {
-                                <div class="space-y-6 animate-in fade-in duration-150">
-                                    // 5 KPI Cards Row
-                                    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                                <div class="space-y-3 sm:space-y-6 animate-in fade-in duration-150">
+                                    // Compact KPI Pills for Mobile (tappable quick filters, keeps alerts above the fold)
+                                    <div class="flex md:hidden items-center gap-2 overflow-x-auto pb-1">
+                                        <button
+                                            type="button"
+                                            class=move || if filter_status.get() == "todos" && !filter_urgent_sla.get() {
+                                                "px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-bold shrink-0 flex items-center gap-1.5 shadow-2xs"
+                                            } else {
+                                                "px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-[11px] font-semibold shrink-0 flex items-center gap-1.5"
+                                            }
+                                            on:click=move |_| { filter_status.set("todos".to_string()); filter_urgent_sla.set(false); }
+                                        >
+                                            <span>"Total"</span>
+                                            <span class="font-mono font-black">{total_count}</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class=move || if filter_status.get() == "pending" {
+                                                "px-3 py-1.5 rounded-xl bg-amber-600 text-white text-[11px] font-bold shrink-0 flex items-center gap-1.5 shadow-2xs"
+                                            } else {
+                                                "px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-semibold shrink-0 flex items-center gap-1.5"
+                                            }
+                                            on:click=move |_| { filter_status.set("pending".to_string()); filter_urgent_sla.set(false); }
+                                        >
+                                            <span>"Pendientes"</span>
+                                            <span class="font-mono font-black">{pending_count}</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class=move || if filter_status.get() == "verified" {
+                                                "px-3 py-1.5 rounded-xl bg-purple-600 text-white text-[11px] font-bold shrink-0 flex items-center gap-1.5 shadow-2xs"
+                                            } else {
+                                                "px-3 py-1.5 rounded-xl bg-purple-50 border border-purple-200 text-purple-800 text-[11px] font-semibold shrink-0 flex items-center gap-1.5"
+                                            }
+                                            on:click=move |_| { filter_status.set("verified".to_string()); filter_urgent_sla.set(false); }
+                                        >
+                                            <span>"En Campo"</span>
+                                            <span class="font-mono font-black">{verified_count}</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class=move || if filter_urgent_sla.get() {
+                                                "px-3 py-1.5 rounded-xl bg-red-600 text-white text-[11px] font-bold shrink-0 flex items-center gap-1.5 shadow-2xs"
+                                            } else {
+                                                "px-3 py-1.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold shrink-0 flex items-center gap-1.5"
+                                            }
+                                            on:click=move |_| filter_urgent_sla.update(|v| *v = !*v)
+                                        >
+                                            <span>"SLA Urgente"</span>
+                                            <span class="font-mono font-black">{urgent_count}</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class=move || if filter_status.get() == "solved" {
+                                                "px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-[11px] font-bold shrink-0 flex items-center gap-1.5 shadow-2xs"
+                                            } else {
+                                                "px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-semibold shrink-0 flex items-center gap-1.5"
+                                            }
+                                            on:click=move |_| { filter_status.set("solved".to_string()); filter_urgent_sla.set(false); }
+                                        >
+                                            <span>"Resueltos"</span>
+                                            <span class="font-mono font-black">{solved_count}</span>
+                                        </button>
+                                    </div>
+
+                                    // 5 KPI Cards Row (Desktop)
+                                    <div class="hidden md:grid md:grid-cols-5 gap-3">
                                         <div class="p-3.5 rounded-2xl bg-white border border-slate-200 shadow-xs">
                                             <p class="text-xs font-medium text-slate-500">"Total Denuncias"</p>
                                             <h3 class="text-xl font-bold text-slate-900 font-mono mt-0.5">{total_count}</h3>
@@ -1960,24 +2050,37 @@ pub fn AuthorityDashboard(
                                     </div>
 
                                     // Filter bar
-                                    <div class="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
-                                        <div class="flex flex-col sm:flex-row gap-3 items-center justify-between">
-                                            <div class="relative w-full sm:w-72">
-                                                <svg class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 transform -translate-y-1/2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                    <circle cx="11" cy="11" r="8"></circle>
-                                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                                                </svg>
-                                                <input
-                                                    type="text"
-                                                    placeholder="Buscar denuncia, zona o calle..."
-                                                    class="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-slate-900 transition"
-                                                    prop:value=move || search_query.get()
-                                                    on:input=move |e| search_query.set(event_target_value(&e))
-                                                />
+                                    <div class="p-3 sm:p-4 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-2.5 sm:space-y-3">
+                                        <div class="flex flex-col sm:flex-row gap-2.5 sm:gap-3 items-stretch sm:items-center justify-between">
+                                            <div class="flex items-center gap-2 w-full sm:w-auto">
+                                                <div class="relative flex-1 sm:w-72">
+                                                    <svg class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 transform -translate-y-1/2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                        <circle cx="11" cy="11" r="8"></circle>
+                                                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                                    </svg>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Buscar denuncia, zona o calle..."
+                                                        class="w-full pl-9 pr-3 py-2 sm:py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-slate-900 transition"
+                                                        prop:value=move || search_query.get()
+                                                        on:input=move |e| search_query.set(event_target_value(&e))
+                                                    />
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    class=move || if show_mobile_extra_filters.get() {
+                                                        "sm:hidden px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold shrink-0 cursor-pointer"
+                                                    } else {
+                                                        "sm:hidden px-3 py-2 rounded-xl bg-slate-100 text-slate-700 border border-slate-200 text-xs font-semibold shrink-0 cursor-pointer"
+                                                    }
+                                                    on:click=move |_| show_mobile_extra_filters.update(|v| *v = !*v)
+                                                >
+                                                    "Filtros"
+                                                </button>
                                             </div>
 
                                             // Status Filter Chips
-                                            <div class="flex items-center space-x-1.5 overflow-x-auto w-full sm:w-auto text-xs">
+                                            <div class="flex items-center space-x-1.5 overflow-x-auto w-full sm:w-auto text-xs pb-0.5 sm:pb-0">
                                                 <button
                                                     class=move || {
                                                         if filter_status.get() == "todos" { "px-2.5 py-1 rounded-lg bg-slate-900 text-white font-semibold" } else { "px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200 font-medium" }
@@ -2064,8 +2167,14 @@ pub fn AuthorityDashboard(
                                             </div>
                                         </div>
 
-                                        // Second row: District chips and SLA Urgent toggle
-                                        <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
+                                        // Second row: District chips and SLA Urgent toggle (collapsible on mobile)
+                                        <div class=move || {
+                                            if show_mobile_extra_filters.get() {
+                                                "flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs"
+                                            } else {
+                                                "hidden sm:flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs"
+                                            }
+                                        }>
                                             <div class="flex items-center space-x-1.5">
                                                 <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">"Distrito:"</span>
                                                 <button
@@ -2111,8 +2220,258 @@ pub fn AuthorityDashboard(
                                         </div>
                                     </div>
 
-                                    // Alerts Table
-                                    <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+                                    // Mobile Tactical Alert Cards (md:hidden)
+                                    <div class="md:hidden space-y-3">
+                                        {move || {
+                                            let list = displayed_alerts.get();
+                                            if list.is_empty() {
+                                                view! {
+                                                    <div class="p-8 bg-white rounded-2xl border border-slate-200 text-center text-xs text-slate-400">
+                                                        "No se encontraron denuncias que coincidan con los filtros."
+                                                    </div>
+                                                }.into_view()
+                                            } else {
+                                                list.into_iter().map(|a| {
+                                                    let alert_for_resolve = a.clone();
+                                                    let alert_for_dismiss = a.clone();
+                                                    let alert_for_transfer = a.clone();
+                                                    let alert_for_squad = a.clone();
+                                                    let alert_for_hist = a.clone();
+                                                    let alert_for_acta = a.clone();
+                                                    let alert_for_pdf = a.clone();
+                                                    let a_id_map = a.id.clone();
+                                                    let a_dom_map = a.category.domain();
+                                                    let a_lat_map = a.latitude;
+                                                    let a_lng_map = a.longitude;
+                                                    let maps_href = format!("https://maps.google.com/?q={:.6},{:.6}", a.latitude, a.longitude);
+                                                    let (_, _, sla_text, sla_class) = get_alert_sla(&a);
+
+                                                    let sev_border = match a.severity {
+                                                        EcoSeverity::Critico => "border-l-4 border-l-red-500",
+                                                        EcoSeverity::Medio => "border-l-4 border-l-amber-500",
+                                                        EcoSeverity::Bajo => "border-l-4 border-l-emerald-500",
+                                                    };
+                                                    let sev_badge_cls = match a.severity {
+                                                        EcoSeverity::Critico => "bg-red-600 text-white",
+                                                        EcoSeverity::Medio => "bg-amber-500 text-white",
+                                                        EcoSeverity::Bajo => "bg-emerald-600 text-white",
+                                                    };
+                                                    let sev_label = match a.severity {
+                                                        EcoSeverity::Critico => "Crítico",
+                                                        EcoSeverity::Medio => "Medio",
+                                                        EcoSeverity::Bajo => "Bajo",
+                                                    };
+                                                    let status_cls = match a.status.as_str() {
+                                                        "solved" => "bg-emerald-50 text-emerald-800 border-emerald-200",
+                                                        "dismissed" => "bg-slate-100 text-slate-600 border-slate-200",
+                                                        "verified" => "bg-purple-50 text-purple-800 border-purple-200",
+                                                        _ => "bg-amber-50 text-amber-800 border-amber-200",
+                                                    };
+                                                    let status_label = match a.status.as_str() {
+                                                        "solved" => "Resuelto",
+                                                        "dismissed" => "Descartado",
+                                                        "verified" => "En Inspección",
+                                                        _ => "Pendiente",
+                                                    };
+
+                                                    view! {
+                                                        <div class={format!("bg-white rounded-2xl border border-slate-200 shadow-xs p-3.5 space-y-3 {}", sev_border)}>
+                                                            // Top badges
+                                                            <div class="flex items-center justify-between gap-2 flex-wrap">
+                                                                <div class="flex items-center gap-1.5 flex-wrap">
+                                                                    <span class={format!("px-2 py-0.5 rounded-full text-[10px] font-bold {}", sev_badge_cls)}>
+                                                                        {sev_label}
+                                                                    </span>
+                                                                    <span class={format!("px-2 py-0.5 rounded-md text-[10px] font-bold border {}", status_cls)}>
+                                                                        {status_label}
+                                                                    </span>
+                                                                    <span class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-semibold">
+                                                                        {a.category.display_name()}
+                                                                    </span>
+                                                                </div>
+                                                                <span class={format!("px-2 py-0.5 rounded-full text-[10px] border {}", sla_class)}>
+                                                                    {sla_text}
+                                                                </span>
+                                                            </div>
+
+                                                            // Title, address & timestamp
+                                                            <div>
+                                                                <h4 class="text-sm font-bold text-slate-900 leading-snug">
+                                                                    {a.title.clone()}
+                                                                </h4>
+                                                                <p class="text-xs text-slate-600 mt-0.5">
+                                                                    "📍 " {a.address.clone()} " · " <span class="font-semibold">{a.district.display_name()}</span>
+                                                                </p>
+                                                                <p class="text-[10px] text-slate-400 font-mono mt-0.5">
+                                                                    {a.created_at.clone()}
+                                                                </p>
+                                                            </div>
+
+                                                            // Quick navigation & evidence row
+                                                            <div class="grid grid-cols-2 gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    class="min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                                                                    on:click=move |_| {
+                                                                        active_domain.set(a_dom_map);
+                                                                        selected_alert_id.set(Some(a_id_map.clone()));
+                                                                        show_dashboard.set(false);
+                                                                        let _ = js_sys::eval(&format!(
+                                                                            "if (window.ecoMap && window.ecoMap.flyTo) window.ecoMap.flyTo({}, {}, 16.5);",
+                                                                            a_lat_map, a_lng_map
+                                                                        ));
+                                                                    }
+                                                                >
+                                                                    <span>"🗺️"</span>
+                                                                    <span>"Ver en Mapa"</span>
+                                                                </button>
+
+                                                                <a
+                                                                    href=maps_href
+                                                                    target="_blank"
+                                                                    rel="noreferrer"
+                                                                    class="min-h-[38px] px-3 py-1.5 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 text-xs font-semibold flex items-center justify-center gap-1.5"
+                                                                >
+                                                                    <span>"🧭"</span>
+                                                                    <span>"Ir (Maps)"</span>
+                                                                </a>
+                                                            </div>
+
+                                                            // Secondary info buttons (Private photo / History / Acta)
+                                                            <div class="flex items-center gap-2 flex-wrap">
+                                                                {(a.is_citizen_security() && a.has_private_evidence).then(|| {
+                                                                    let ev_id = a.id.clone();
+                                                                    let ev_title = a.title.clone();
+                                                                    view! {
+                                                                        <button
+                                                                            type="button"
+                                                                            class="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-800 border border-indigo-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                                                                            on:click=move |_| {
+                                                                                if let Some(u) = current_user.get_untracked() {
+                                                                                    let id = ev_id.clone();
+                                                                                    let title = ev_title.clone();
+                                                                                    let tok = u.token.clone();
+                                                                                    spawn_local(async move {
+                                                                                        let mut imgs = Vec::new();
+                                                                                        for slot in [1u8, 2u8] {
+                                                                                            let url = alert_evidence_url(&id, slot);
+                                                                                            if let Ok(b) = fetch_protected_image_blob_url(&url, &tok).await {
+                                                                                                imgs.push(b);
+                                                                                            }
+                                                                                        }
+                                                                                        private_evidence_modal.set(Some((title, imgs)));
+                                                                                    });
+                                                                                }
+                                                                            }
+                                                                        >
+                                                                            <span>"🔒"</span>
+                                                                            <span>"Foto Privada"</span>
+                                                                        </button>
+                                                                    }
+                                                                })}
+
+                                                                {(!a.is_citizen_security()).then(|| view! {
+                                                                    <button
+                                                                        type="button"
+                                                                        class="px-2.5 py-1.5 rounded-xl bg-sky-50 text-sky-800 border border-sky-200 text-xs font-semibold cursor-pointer"
+                                                                        on:click=move |_| inspection_target.set(Some(alert_for_acta.clone()))
+                                                                    >
+                                                                        "📄 Acta"
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        class="px-2.5 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold cursor-pointer"
+                                                                        on:click=move |_| {
+                                                                            if let Ok(json_str) = serde_json::to_string(&alert_for_pdf) {
+                                                                                let _ = js_sys::eval(&format!("window.ecoPdf.generateInspectionActa({});", json_str));
+                                                                            }
+                                                                        }
+                                                                    >
+                                                                        "PDF"
+                                                                    </button>
+                                                                })}
+
+                                                                <button
+                                                                    type="button"
+                                                                    class="px-2.5 py-1.5 rounded-xl bg-purple-50 text-purple-800 border border-purple-200 text-xs font-semibold cursor-pointer"
+                                                                    on:click=move |_| history_target.set(Some(alert_for_hist.clone()))
+                                                                >
+                                                                    "📜 Historial"
+                                                                </button>
+                                                            </div>
+
+                                                            // Primary authority actions (thumb-friendly)
+                                                            {(a.status == "pending" || a.status == "verified").then(|| {
+                                                                let is_pending = a.status == "pending";
+                                                                let dispatch_label = if a.is_citizen_security() {
+                                                                    if is_pending { "🚓 Despachar" } else { "🚓 Reasignar" }
+                                                                } else {
+                                                                    if is_pending { "👷 Asignar" } else { "👷 Reasignar" }
+                                                                };
+                                                                view! {
+                                                                    <div class="pt-2 border-t border-slate-100 space-y-2">
+                                                                        <div class="grid grid-cols-2 gap-2">
+                                                                            <button
+                                                                                type="button"
+                                                                                class="min-h-[40px] px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold cursor-pointer"
+                                                                                on:click=move |_| {
+                                                                                    action_error.set(None);
+                                                                                    assign_squad_target.set(Some(alert_for_squad.clone()));
+                                                                                }
+                                                                            >
+                                                                                {dispatch_label}
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                class="min-h-[40px] px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer"
+                                                                                on:click=move |_| {
+                                                                                    resolve_comment.set("".to_string());
+                                                                                    resolve_photo_url.set(None);
+                                                                                    action_error.set(None);
+                                                                                    resolve_target.set(Some(alert_for_resolve.clone()));
+                                                                                }
+                                                                            >
+                                                                                "✅ Resolver"
+                                                                            </button>
+                                                                        </div>
+                                                                        {is_pending.then(|| view! {
+                                                                            <div class="grid grid-cols-2 gap-2">
+                                                                                <button
+                                                                                    type="button"
+                                                                                    class="py-1.5 rounded-xl bg-slate-100 text-slate-700 text-[11px] font-semibold cursor-pointer"
+                                                                                    on:click=move |_| {
+                                                                                        dismiss_reason.set("".to_string());
+                                                                                        action_error.set(None);
+                                                                                        dismiss_target.set(Some(alert_for_dismiss.clone()));
+                                                                                    }
+                                                                                >
+                                                                                    "Descartar"
+                                                                                </button>
+                                                                                <button
+                                                                                    type="button"
+                                                                                    class="py-1.5 rounded-xl bg-slate-100 text-slate-700 text-[11px] font-semibold cursor-pointer"
+                                                                                    on:click=move |_| {
+                                                                                        transfer_district.set(alert_for_transfer.district);
+                                                                                        action_error.set(None);
+                                                                                        transfer_target.set(Some(alert_for_transfer.clone()));
+                                                                                    }
+                                                                                >
+                                                                                    "Transferir"
+                                                                                </button>
+                                                                            </div>
+                                                                        })}
+                                                                    </div>
+                                                                }
+                                                            })}
+                                                        </div>
+                                                    }
+                                                }).collect_view()
+                                            }
+                                        }}
+                                    </div>
+
+                                    // Alerts Table (Desktop)
+                                    <div class="hidden md:block bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
                                         <div class="overflow-x-auto">
                                             <table class="w-full text-left text-xs">
                                                 <thead class="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase tracking-wider text-[10px]">
